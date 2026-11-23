@@ -17,3 +17,7 @@ https://polyhaven.com/a/asphalt_04
 https://polyhaven.com/a/concrete_floor_worn_001
 County grass and rock ground cover adapted from Poly Haven's CC0 Aerial Grass Rock.
 https://polyhaven.com/a/aerial_grass_rock
+
+Hands adapted from the generic right-hand mesh in @webxr-input-profiles/assets 1.0.20.
+https://github.com/immersive-web/webxr-input-profiles
+Posed, mirrored, shaded and simplified for the game. MIT license in HAND-LICENSE.txt.

@@ -1,4 +1,4 @@
-import { handMesh } from "./hand-model.ts";
+import { handMesh, fistMaterial } from "./hand-model.ts";
 import {
   guardRaise,
   punchPose,
@@ -166,6 +166,7 @@ export class Doodle {
       this.head,
       color,
     );
+    const skin = fistMaterial();
     for (const [part, joint, end, x, y, arm] of [
       [this.leftArm, this.leftElbow, this.leftHand, -0.28, 1.24, true],
       [this.rightArm, this.rightElbow, this.rightHand, 0.28, 1.24, true],
@@ -198,9 +199,9 @@ export class Doodle {
         0,
       );
       if (arm) {
-        const hand = handMesh(x < 0 ? 1 : -1, paper);
+        const hand = handMesh(x < 0 ? 1 : -1, skin);
         hand.rotation.x = -Math.PI / 2;
-        hand.position.y = -0.045;
+        hand.rotation.z = x < 0 ? -0.6 : 0.6;
         end.add(hand);
       } else outlinedBox([0.15, 0.13, 0.24], [0, 0, 0.065], dark, end, color);
       this.group.add(part);
