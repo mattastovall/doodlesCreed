@@ -1,4 +1,11 @@
 import {
+  CountyShops,
+  cleanRecord,
+  wanted,
+  endPursuit,
+  type CrimeState,
+} from "../src/county-crime.ts";
+import {
   FISTS,
   PUNCHES,
   nextPunch,
@@ -51,6 +58,7 @@ export interface PlayerState {
   anchor: V3 | null;
   lastMove: number;
   lastShot: number;
+  crime?: CrimeState;
   swing?: Punch;
   reaction?: PunchImpact;
   punchPending?: boolean;
@@ -84,6 +92,7 @@ export interface ReserveRequest {
 }
 interface Room {
   citizens?: CountyCitizens;
+  shops?: CountyShops;
   incidents?: CountyImpacts;
   structures?: CountyStructures;
   wreckage?: CountyWreckage;
@@ -429,6 +438,7 @@ export class Rooms {
     const p = this.memberships.get(ws)?.players.get(ws);
     if (p) {
       // Loading invulnerability cannot become a permanent detached shield.
+      if (p.crime) this.memberships.get(ws)?.shops?.release(p.id, p.crime);
       if (p.ready === false) {
         p.ready = true;
         p.shieldUntil = Date.now();
@@ -443,6 +453,7 @@ export class Rooms {
     if (room.duel) {
       for (const car of room.cars!) car.driver = null;
     } else {
+      room.shops = new CountyShops(room.city.boxes);
       room.citizens = new CountyCitizens(room.city, room.cars!, room.spatial);
       room.npcs = room.citizens.actors;
       const incidents = (room.incidents = new CountyImpacts());
@@ -549,6 +560,10 @@ export class Rooms {
     if (m.compact === true) this.compact.add(ws);
     if (previous !== ws) previous.close(4001, "Session resumed elsewhere");
     this.resumeSuccess++;
+    if (p.crime?.stars) {
+      p.crime.arrestAt = 0;
+      p.crime.escapeAt = Date.now() + (12 + p.crime.stars * 3) * 1000;
+    }
     send(ws, {
       type: "resumed",
       ...this.sessionSnapshot(r, p, session.id, secret),
@@ -664,6 +679,36 @@ export class Rooms {
       );
       if (npcRosterBefore !== r.npcs.map((p) => p.id).join(",")) this.roster(r);
       for (const [ws, p] of r.players) {
+        if (
+          r.shops &&
+          p.crime &&
+          ws.readyState === WebSocket.OPEN &&
+          p.ready !== false
+        ) {
+          const rcd = p.crime;
+          if (rcd.stars || rcd.shop !== -1) {
+            const event = r.shops.update(
+              p.id,
+              rcd,
+              p.p,
+              p.height,
+              !!r.cars?.some((c) => c.driver === p.id),
+              p.hp > 0,
+              now,
+              r.spatial.ray.bind(r.spatial),
+              r.citizens!.actors,
+            );
+            if (event === "Busted") {
+              p.p = [...r.city.spawns[0]];
+              p.moveCredit = 0;
+              p.shieldUntil = now + 3000;
+              p.notoriety = 0;
+              send(ws, { type: "correction", p: p.p });
+            }
+            if (event || !rcd.stars || this.tickCount % 8 === 0)
+              send(ws, { type: "crime", record: rcd, event });
+          }
+        }
         if (p.ready === false && now - p.lastMove > 60000)
           ws.close(1008, "Loading timeout");
         if (
@@ -805,6 +850,14 @@ export class Rooms {
     punchMove?: number,
   ) {
     if (victim.hp <= 0 || Date.now() < victim.shieldUntil) return;
+    if (attacker.crime && victim !== attacker && damage > 0) {
+      wanted(
+        attacker.crime,
+        attacker.p,
+        Date.now(),
+        victim.npc && victim.name === "Police officer" ? 2 : 1,
+      );
+    }
     const before = victim.hp;
     victim.hp = Math.max(0, victim.hp - damage);
     if (r.citizens && attacker !== victim && !attacker.npc)
@@ -914,7 +967,9 @@ export class Rooms {
   leave(ws: WebSocket) {
     const r = this.memberships.get(ws);
     if (!r) return;
-    const driver = r.players.get(ws)?.id;
+    const leaving = r.players.get(ws);
+    if (leaving?.crime) r.shops?.release(leaving.id, leaving.crime);
+    const driver = leaving?.id;
     for (const c of r.cars ?? []) if (c.driver === driver) c.driver = null;
     r.players.delete(ws);
     this.memberships.delete(ws);
@@ -1092,6 +1147,7 @@ export class Rooms {
         deadAt: 0,
         ready: m.compact !== true,
         notoriety: r.citizens ? 0 : undefined,
+        crime: r.shops ? cleanRecord() : undefined,
         shieldUntil: m.compact === true ? Infinity : Date.now() + 3000,
         mags: [30, 8, 14, 5],
         reloadUntil: 0,
@@ -1134,6 +1190,40 @@ export class Rooms {
       return;
     }
     const vehicle = r.cars?.find((c) => c.driver === p.id);
+    if (m.type === "buy-aid") {
+      if (
+        !vehicle &&
+        p.hp > 0 &&
+        p.hp < 100 &&
+        p.ready !== false &&
+        r.shops &&
+        p.crime &&
+        r.shops.buyAid(p.crime, p.p, p.height, r.spatial.ray.bind(r.spatial))
+      ) {
+        p.hp = 100;
+        send(ws, {
+          type: "crime",
+          record: p.crime,
+          event: "First aid · health restored",
+        });
+      }
+      return;
+    }
+    if (m.type === "rob") {
+      if (r.shops && p.crime && p.hp > 0 && p.ready !== false) {
+        const event = r.shops.start(
+          p.id,
+          p.crime,
+          p.p,
+          p.height,
+          !!vehicle,
+          Date.now(),
+          r.spatial.ray.bind(r.spatial),
+        );
+        if (event) send(ws, { type: "crime", record: p.crime, event });
+      }
+      return;
+    }
     if (m.type === "door" && r.structures) {
       if (
         !vehicle &&
@@ -1298,6 +1388,11 @@ export class Rooms {
       p.punchPending = false;
       p.punchReadyAt = 0;
       if (r.citizens) p.notoriety = 0;
+      if (p.crime) {
+        r.shops?.release(p.id, p.crime);
+        endPursuit(p.crime, false);
+        send(ws, { type: "crime", record: p.crime });
+      }
       p.mags = [30, 8, 14, 5];
       p.reloadUntil = 0;
       p.moveCredit = 3;

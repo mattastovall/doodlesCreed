@@ -258,6 +258,31 @@ export class Doodle {
     this.aimRig.visible =
       this.role !== "civilian" || this.civilianAction === "shoot";
   }
+  uniformPolice() {
+    const navy = new T.MeshBasicMaterial({ color: 0x253956 }),
+      badge = new T.MeshBasicMaterial({ color: 0xeac66b });
+    const cap = new T.Mesh(
+      new T.CylinderGeometry(0.22, 0.245, 0.095, 16),
+      navy,
+    );
+    cap.position.set(0, 0.18, 0);
+    cap.scale.z = 0.92;
+    this.head.add(cap);
+    outlinedBox(
+      [0.28, 0.034, 0.16],
+      [0, 0.14, 0.175],
+      navy,
+      this.head,
+      this.color,
+    );
+    outlinedBox(
+      [0.055, 0.077, 0.018],
+      [0.11, 0.41, 0.17],
+      badge,
+      this.spine,
+      this.color,
+    );
+  }
   react(region: HitRegion = "body", side = 1, damage = 25) {
     this.impactRegion = region;
     this.impactSide = side < 0 ? -1 : 1;

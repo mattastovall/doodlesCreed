@@ -10,3 +10,10 @@ Street Lamp 01 and Namaqualand Stones 01 by Poly Haven (CC0).
 https://polyhaven.com/a/street_lamp_01
 https://polyhaven.com/a/namaqualand_stones_01
 County adaptations: selected mesh modules, reduced geometry and white-and-blue materials.
+
+County sky, asphalt and worn concrete adapted from Poly Haven CC0 photography.
+https://polyhaven.com/a/kloppenheim_06_puresky
+https://polyhaven.com/a/asphalt_04
+https://polyhaven.com/a/concrete_floor_worn_001
+County grass and rock ground cover adapted from Poly Haven's CC0 Aerial Grass Rock.
+https://polyhaven.com/a/aerial_grass_rock

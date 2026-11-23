@@ -177,11 +177,18 @@ export class Renderer {
   }
   countyCars: import("./county-car.ts").CountyCarModel[] = [];
   private county = false;
+  private sunlight?: import("./county-atmosphere.ts").CountySunlight;
   private frameCost = 0;
   private qualityHigh = true;
   async build(city: City) {
+    this.sunlight?.dispose();
+    this.sunlight = undefined;
     this.countyCars = [];
     const county = city.seed === "switchback-county";
+    this.renderer.shadowMap.enabled = county;
+    this.renderer.shadowMap.autoUpdate = !county;
+    (this.scene.fog as T.Fog).color.set(county ? 0xe1cfc1 : PAPER);
+    this.inkPost.uniforms.ink.value.set(county ? 0x304464 : INK);
     if (county !== this.county) {
       this.county = county;
       this.frameCost = 0.025;
@@ -209,6 +216,7 @@ export class Renderer {
         (b.piece ||
           b.kind === "building" ||
           b.kind === "road" ||
+          b.kind === "ground" ||
           b.kind === "county-tree")
       )
         continue;
@@ -255,7 +263,11 @@ export class Renderer {
               : 0;
       const inst = new T.InstancedMesh(
           unit.clone(),
-          inkMaterial(INK, fill),
+          county
+            ? new T.MeshLambertMaterial({
+                color: kind === "ground" ? 0xc4be97 : 0xdfd7c7,
+              })
+            : inkMaterial(INK, fill),
           boxes.length,
         ),
         matrix = new T.Matrix4(),
@@ -275,6 +287,7 @@ export class Renderer {
               unitEdges.getZ(j) * b.s[2] + b.p[2],
             );
       });
+      inst.receiveShadow = county;
       inst.computeBoundingSphere();
       group.add(inst);
       if (edgeVertices.length) {
@@ -381,6 +394,8 @@ export class Renderer {
     }
     unit.dispose();
     if (city.seed === "switchback-county") {
+      const { CountySunlight } = await import("./county-atmosphere.ts");
+      this.sunlight = new CountySunlight(this.scene);
       this.countyCars = await (
         await import("./county-render.ts")
       ).drawCounty(city, this.cityGroup);
@@ -800,6 +815,7 @@ export class Renderer {
             child.position.z - this.camera.position.z,
           ) < 180;
     }
+    this.sunlight?.update(this.camera, this.renderer, this.cityGroup, time);
     this.inkPost.uniforms.clip.value.set(this.camera.near, this.camera.far);
     this.renderer.setRenderTarget(this.inkTarget);
     this.renderer.render(this.scene, this.camera);

@@ -1,4 +1,6 @@
 import * as T from "three";
+import { VEHICLE_DIMENSIONS } from "./county-vehicle-dimensions.ts";
+import { coastSun, skyUV } from "./county-atmosphere.ts";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
@@ -70,25 +72,48 @@ function seatedMotorist() {
   return body;
 }
 const driverFigure = seatedMotorist();
-export async function loadFleet() {
+export async function loadFleet(sky: T.Texture) {
   const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   const paint = new T.ShaderMaterial({
     vertexColors: true,
-    uniforms: { coat: { value: new T.Color(0xf5f4ec) } },
-    vertexShader: `uniform vec3 coat; varying vec3 tint; varying vec3 n; void main(){tint=mix(pow(color.rgb,vec3(2.2)),coat,color.a);n=normalize(mat3(modelMatrix)*normal);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-    fragmentShader: `varying vec3 tint;varying vec3 n;void main(){float sun=dot(normalize(n),normalize(vec3(-.5,1.,.45)));float band=smoothstep(-.2,-.12,sun)*.11+smoothstep(.48,.56,sun)*.13;gl_FragColor=vec4(mix(vec3(.13,.18,.39),tint,.76+band),1.);
- #include <colorspace_fragment>
- }`,
+    uniforms: {
+      coat: { value: new T.Color(0xf5f4ec) },
+      panorama: { value: sky },
+      sun: { value: coastSun },
+    },
+    vertexShader: `uniform vec3 coat; varying vec3 tint,n,world;varying float enamel;
+    void main(){enamel=color.a;tint=mix(pow(color.rgb,vec3(2.2)),coat,enamel);n=normalize(mat3(modelMatrix)*normal);world=(modelMatrix*vec4(position,1.)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+    fragmentShader: `varying vec3 tint,n,world;varying float enamel;uniform vec3 sun;uniform sampler2D panorama;
+    ${skyUV}
+    void main(){
+      vec3 N=normalize(n), V=normalize(cameraPosition-world), R=reflect(-V,N);
+      float lit=dot(N,sun), fresnel=pow(1.-max(0.,dot(N,V)),3.);
+      vec3 sky=texture2D(panorama,skyUV(R)).rgb;
+      vec3 body=tint*mix(vec3(.49,.58,.73),vec3(1.08,.97,.83),smoothstep(-.20,.38,lit));
+      vec3 coat=mix(body,sky,enamel*(.10+.45*fresnel));
+      coat+=vec3(1.,.82,.59)*pow(max(0.,dot(R,sun)),55.)*(.12+.6*enamel);
+      gl_FragColor=vec4(coat,1.);
+      #include <colorspace_fragment>
+    }`,
   });
-  const glass = new T.MeshBasicMaterial({
-    color: 0xa7c9e3,
+  const glass = new T.ShaderMaterial({
+    uniforms: { panorama: { value: sky } },
     transparent: true,
-    opacity: 0.16,
     depthWrite: false,
-    side: T.FrontSide,
+    vertexShader: `varying vec3 n,world;void main(){world=(modelMatrix*vec4(position,1.)).xyz;n=mat3(modelMatrix)*normal;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+    fragmentShader: `uniform sampler2D panorama; varying vec3 n,world;
+    ${skyUV}
+    void main(){vec3 v=normalize(cameraPosition-world),N=normalize(n);float f=pow(1.-max(dot(v,N),0.),2.);
+      vec3 color=texture2D(panorama,skyUV(reflect(-v,N))).rgb;
+      gl_FragColor=vec4(mix(vec3(.06,.18,.22),color,.62+f*.32),.2+.55*f);
+      #include <colorspace_fragment>
+    }`,
   });
-  const paints = [0xf5f4ec, 0xcbd9e9, 0x98afcc, 0xe2e7ee].map((hex) => {
+  const paints = [
+    0xf5f4ec, 0xead28b, 0x748fab, 0xdbe8ee, 0x7ca8ac, 0xc98172,
+  ].map((hex) => {
     const material = paint.clone();
+    material.uniforms.panorama.value = sky;
     material.uniforms.coat.value.setHex(hex);
     return material;
   });
@@ -167,14 +192,56 @@ export async function loadFleet() {
       templates.set(kind, scene);
     }),
   );
-  return (kind: VehicleKind, finish: number) =>
-    new CountyCarModel(
+  const shadow = new T.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    vertexShader: `varying vec2 st;void main(){st=uv*2.-1.;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+    fragmentShader: `varying vec2 st;void main(){float edge=length(pow(abs(st),vec2(3.)));gl_FragColor=vec4(.025,.032,.048,.37*(1.-smoothstep(.32,1.,edge)));
+    #include <colorspace_fragment>
+    }`,
+  });
+  const contact = new T.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+  const policePanel = panel(256, 64, (c) => {
+    c.fillStyle = "#22334b";
+    c.fillRect(0, 0, 256, 64);
+    c.fillStyle = "#f1f2e7";
+    c.font = "bold 42px sans-serif";
+    c.textAlign = "center";
+    c.fillText("POLICE", 128, 47);
+  });
+  return (kind: VehicleKind, finish: number, patrol = false) => {
+    const car = new CountyCarModel(
       templates.get(kind)!,
-      paints[finish % paints.length],
+      paints[patrol ? 0 : finish % paints.length],
       paints[0],
     );
+    const [w, l, h] = VEHICLE_DIMENSIONS[kind];
+    const contactMesh = new T.Mesh(contact, shadow);
+    contactMesh.position.y = 0.012;
+    contactMesh.scale.set(w * 2.65, 1, l * 2.2);
+    car.add(contactMesh);
+    if (patrol) {
+      const bar = new T.Group();
+      for (const side of [-1, 1]) {
+        const lens = new T.Mesh(
+          new T.BoxGeometry(0.43, 0.14, 0.26),
+          new T.MeshBasicMaterial({ color: side < 0 ? 0xe45358 : 0x477ef4 }),
+        );
+        lens.position.set(side * 0.235, h + 0.07, 0);
+        bar.add(lens);
+        car.beacons.push(lens.material);
+        const door = new T.Mesh(new T.PlaneGeometry(1.08, 0.29), policePanel);
+        door.position.set(side * (w * 0.89), h * 0.44, -0.05);
+        door.rotation.y = (side * Math.PI) / 2;
+        bar.add(door);
+      }
+      car.add(bar);
+    }
+    return car;
+  };
 }
 export class CountyCarModel extends T.Group {
+  readonly beacons: T.MeshBasicMaterial[] = [];
   readonly seat: T.Vector3;
   readonly doorSide: number;
   private motorist: T.Mesh;
@@ -216,7 +283,21 @@ export class CountyCarModel extends T.Group {
     this.add(model);
     this.levels.forEach((o, i) => (o.visible = i === 2));
   }
-  update(driver: string | null, now: number, distance: number, steer = 0) {
+  update(
+    driver: string | null,
+    now: number,
+    distance: number,
+    steer = 0,
+    responding = false,
+    reduced = false,
+  ) {
+    for (const [i, light] of this.beacons.entries()) {
+      const bright =
+        responding && (reduced || Math.sin(now * 8 + i * Math.PI) > 0);
+      light.color.setHex(
+        i === 0 ? (bright ? 0xff9b9b : 0xa32639) : bright ? 0xa5daff : 0x314bb1,
+      );
+    }
     const dt = this.lastTime
       ? Math.min(0.12, Math.max(0, now - this.lastTime))
       : 0;

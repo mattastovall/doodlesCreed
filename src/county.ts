@@ -167,6 +167,8 @@ export const VEHICLES = [
 ] as const;
 export type VehicleKind = (typeof VEHICLES)[number];
 export interface CountyCar {
+  patrol?: boolean;
+  responding?: boolean;
   p: V3;
   yaw: number;
   kind: VehicleKind;
@@ -244,7 +246,8 @@ export function countyCars(): CountyCar[] {
         dz = road.b[2] - road.a[2];
       const serial = townIndex * routes.length + i;
       cars.push({
-        kind: VEHICLES[serial % VEHICLES.length],
+        kind: i === 2 ? "saloon" : VEHICLES[serial % VEHICLES.length],
+        ...(i === 2 ? { patrol: true } : {}),
         driver: "civilian-driver-" + serial,
         p,
         yaw: Math.atan2(-dir * dx, -dir * dz),

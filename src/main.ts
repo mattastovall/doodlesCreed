@@ -1,3 +1,4 @@
+import { CountyShops, cleanRecord, wanted } from "./county-crime.ts";
 import {
   FISTS,
   PUNCHES,
@@ -95,6 +96,8 @@ class Game {
   network = new Network(this.countySelected ? "county" : "dc");
   cars: CountyCar[] = [];
   citizens?: CountyCitizens;
+  shops?: CountyShops;
+  crime = cleanRecord();
   countySpatial?: Spatial;
   notoriety = 0;
   private citizenTick = 0;
@@ -113,6 +116,13 @@ class Game {
   ) {
     const before = actor.hp;
     actor.hp = Math.max(0, before - amount);
+    if (playerCaused && before > actor.hp)
+      wanted(
+        this.crime,
+        this.player.position.toArray(),
+        Date.now(),
+        actor.name === "Police officer" ? 2 : 1,
+      );
     if (playerCaused)
       this.notoriety = notorietyAfter(
         this.notoriety,
@@ -159,6 +169,7 @@ class Game {
     const p = this.player,
       me = {
         id: "local",
+        crime: this.crime,
         p: p.position.toArray() as V3,
         hp: this.combat.hp,
         height: p.height,
@@ -200,6 +211,24 @@ class Game {
         );
       },
     );
+    const event = this.shops?.update(
+      "local",
+      this.crime,
+      me.p,
+      p.height,
+      this.vehicle >= 0,
+      me.hp > 0,
+      now,
+      q.ray.bind(q),
+      citizens.actors,
+    );
+    if (event) {
+      this.notice(event, 3);
+      if (event === "Busted") {
+        this.player.reset(this.city.spawns[0]);
+        this.notoriety = 0;
+      }
+    }
   }
   vehicle = -1;
   carSpeed = 0;
@@ -416,6 +445,8 @@ class Game {
         performance.now() / 1000,
         model.position.distanceTo(this.render.camera.position),
         k === i ? -this.carSteer / 0.45 : 0,
+        c.responding,
+        settings.reduced,
       );
     });
   }
@@ -552,6 +583,7 @@ class Game {
     }
     this.remoteRopes.clear();
     this.city = city;
+    $("hud").classList.toggle("county-hud", seed === COUNTY);
     this.cars = seed === COUNTY ? countyCars() : [];
     this.vehicle = -1;
     this.drivePending = [];
@@ -586,6 +618,11 @@ class Game {
         ? new Spatial(city.boxes)
         : undefined;
     if (this.countySpatial) this.countySpatial.rubble = this.wreckage;
+    this.shops =
+      seed === COUNTY && !(this.mode === "online" && this.network.duel)
+        ? new CountyShops(city.boxes)
+        : undefined;
+    this.crime = cleanRecord();
     this.citizens = this.countySpatial
       ? new CountyCitizens(city, this.cars, this.countySpatial)
       : undefined;
@@ -990,7 +1027,33 @@ class Game {
             ? "Citizens will attack on sight"
             : this.notoriety > 30
               ? "Citizens may shove or cut you off"
-              : "Explore on foot or take a parked car";
+              : "Find a $ on the map to rob a till";
+      const r = this.crime,
+        now = online ? this.network.worldTime * 1000 : Date.now(),
+        near = this.shops?.near(this.player.position.toArray());
+      if (r.shop !== -1)
+        $("mission").textContent =
+          "At the till · " +
+          Math.max(0, (r.finishAt - now) / 1000).toFixed(1) +
+          "s";
+      else if (near && this.vehicle < 0)
+        $("mission").textContent =
+          "G · Rob " +
+          near.name +
+          (!r.stars && r.cash >= 100 && this.combat.hp < 100
+            ? " · B First aid $100"
+            : "");
+      else if (r.stars)
+        $("mission").textContent = r.arrestAt
+          ? "Move! Police are making an arrest"
+          : "Lose the police · " +
+            Math.max(0, Math.ceil((r.escapeAt - now) / 1000)) +
+            "s";
+      $("crime-wallet").textContent =
+        "$" + r.cash + (r.take ? "  ·  Carrying $" + r.take : "");
+      $("wanted-stars").textContent = r.stars
+        ? "Wanted " + "★".repeat(r.stars)
+        : "";
       $("mission-progress").style.display = "none";
       if (!online) $("mode-label").textContent = "OPEN WORLD";
     }
@@ -1132,6 +1195,47 @@ class Game {
       if (this.state !== "play") return;
       this.keys.add(e.code);
       if (e.repeat) return;
+      if (
+        e.code === "KeyB" &&
+        this.shops &&
+        this.vehicle < 0 &&
+        this.combat.hp < 100
+      ) {
+        if (this.mode === "online") {
+          this.sendState();
+          this.network.send({ type: "buy-aid" });
+        } else if (
+          this.countySpatial &&
+          this.shops.buyAid(
+            this.crime,
+            this.player.position.toArray(),
+            this.player.height,
+            this.countySpatial.ray.bind(this.countySpatial),
+          )
+        ) {
+          this.combat.hp = 100;
+          this.notice("First aid · health restored");
+        }
+        return;
+      }
+      if (e.code === "KeyG" && this.shops && this.vehicle < 0) {
+        if (this.mode === "online") {
+          this.sendState();
+          this.network.send({ type: "rob" });
+        } else if (this.countySpatial) {
+          const event = this.shops.start(
+            "local",
+            this.crime,
+            this.player.position.toArray(),
+            this.player.height,
+            false,
+            Date.now(),
+            this.countySpatial.ray.bind(this.countySpatial),
+          );
+          if (event) this.notice(event);
+        }
+        return;
+      }
       if (e.code === "KeyV" && this.vehicle >= 0) {
         this.cockpit = !this.cockpit;
         return;
@@ -1374,7 +1478,7 @@ class Game {
       ["Tab / Esc", "Scoreboard / pause"],
     ];
     this.showDialog(
-      `<h2>Controls</h2><div class="help-grid">${controls.map(([key, action]) => `<kbd>${key}</kbd><span>${action}</span>`).join("")}</div>${county ? "<p>Notoriety starts at zero. Above 30% citizens may shove or cut you off, above 50% they fight, and above 75% they may shoot or ram.</p>" : ""}<button id="help-done" class="secondary-button">Back</button>`,
+      `<h2>Controls</h2><div class="help-grid">${controls.map(([key, action]) => `<kbd>${key}</kbd><span>${action}</span>`).join("")}</div>${county ? "<p>Press G beside a marked till and stay for three seconds. Lose sight of the police to bank the take. An arrest forfeits it. Spend $100 of banked cash at a till with B to restore health. Notoriety starts at zero. Above 30% citizens may shove or cut you off, above 50% they fight, and above 75% they may shoot or ram.</p>" : ""}<button id="help-done" class="secondary-button">Back</button>`,
       back,
     );
     $("help-done").onclick = back;
@@ -1494,6 +1598,7 @@ class Game {
     this.player.pitch = player.pitch ?? this.player.pitch;
     this.combat.hp = player.hp;
     this.notoriety = player.notoriety ?? 0;
+    this.crime = player.crime ?? cleanRecord();
     this.combat.kills = player.kills;
     this.combat.score = player.kills * 100;
     this.combat.mags = m.mags || player.mags;
@@ -1575,6 +1680,10 @@ class Game {
         '<div class="modal-kicker">RECONNECTING</div><h2>Finding your way back…</h2><p>Your match is continuing. Reconnecting to your runner.</p><button id="reconnect-menu" class="secondary-button">Main menu</button>',
       );
       $("reconnect-menu").onclick = () => this.mainMenu();
+    }
+    if (m.type === "crime") {
+      this.crime = m.record;
+      if (m.event) this.notice(m.event, 3);
     }
     if (m.type === "impact") {
       if (m.reaction) {
@@ -2086,10 +2195,17 @@ class Game {
       }
       if (!model) {
         model = new Doodle(
-          civil ? "#446e95" : state.npc ? "#d23c45" : "#347a75",
+          state.npc && state.name === "Police officer"
+            ? "#283f69"
+            : civil
+              ? "#446e95"
+              : state.npc
+                ? "#d23c45"
+                : "#347a75",
           state.npc ? undefined : state.name,
           civil ? "civilian" : undefined,
         );
+        if (state.npc && state.name === "Police officer") model.uniformPolice();
         model.group.position.fromArray(state.p);
         this.render.scene.add(model.group);
         this.remotes.set(state.id, model);
@@ -2228,6 +2344,27 @@ class Game {
         c.lineTo(road.b[0], road.b[2]);
         c.stroke();
       }
+      c.font = "bold 11px sans-serif";
+      c.textAlign = "center";
+      for (const t of this.shops?.tills ?? []) {
+        if (!t.box.solid) continue;
+        const [x, , z] = t.box.p;
+        c.fillStyle = "#256d61";
+        c.beginPath();
+        c.arc(x, z, 5.8, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = "#fff";
+        c.fillText("$", x, z + 3.7);
+      }
+      if (this.crime.stars)
+        for (const a of this.citizens?.actors ?? this.network.players) {
+          if (a.name === "Police officer" && a.hp > 0) {
+            c.fillStyle = "#224ab0";
+            c.beginPath();
+            c.arc(a.p[0], a.p[2], 3, 0, Math.PI * 2);
+            c.fill();
+          }
+        }
       c.restore();
       c.save();
       c.translate(95, 95);

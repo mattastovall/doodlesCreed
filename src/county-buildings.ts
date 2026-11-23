@@ -20,7 +20,7 @@ function tile(
   const map = new T.CanvasTexture(canvas);
   map.colorSpace = T.SRGBColorSpace;
   map.anisotropy = 4;
-  return new T.MeshBasicMaterial({
+  return new T.MeshLambertMaterial({
     map,
     vertexColors: true,
     transparent,
@@ -134,7 +134,13 @@ function glazing(style: Facade) {
       c.fillStyle = colour;
       c.fillRect(x, y, w, h);
     };
-    fill(0, 0, 128, 128, "rgba(160,187,210,.28)");
+    const sky = c.createLinearGradient(0, 0, 0, 128);
+    sky.addColorStop(0, "rgba(56,109,147,.66)");
+    sky.addColorStop(0.52, "rgba(147,187,202,.45)");
+    sky.addColorStop(0.7, "rgba(245,206,168,.48)");
+    sky.addColorStop(1, "rgba(58,94,115,.36)");
+    c.fillStyle = sky;
+    c.fillRect(0, 0, 128, 128);
     c.fillStyle = "rgba(231,244,246,.27)";
     c.beginPath();
     c.moveTo(12, 0);
@@ -228,7 +234,7 @@ function shadeFaces(geometry: T.BufferGeometry) {
     const light =
       normals.getY(i) * 0.7 - normals.getX(i) * 0.42 + normals.getZ(i) * 0.28;
     const shade =
-      light > 0.45 ? 1 : light > 0 ? 0.9 : light > -0.45 ? 0.78 : 0.65;
+      light > 0.45 ? 1 : light > 0 ? 0.97 : light > -0.45 ? 0.93 : 0.88;
     colors.push(shade, shade, Math.min(1, shade + 0.04));
   }
   geometry.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
@@ -258,7 +264,7 @@ interface Part {
 }
 interface Batch {
   geometry: T.BufferGeometry;
-  material: T.MeshBasicMaterial;
+  material: T.MeshLambertMaterial;
   parts: Part[];
 }
 interface Binding {
@@ -271,15 +277,28 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
   const cube = shadeFaces(new T.BoxGeometry());
   const geometries = new Map([["box", cube as T.BufferGeometry]]);
   const materials = new Map([
-    ["plain", new T.MeshBasicMaterial({ vertexColors: true })],
+    ["plain", new T.MeshLambertMaterial({ vertexColors: true })],
   ]);
   const batches = new Map<string, Batch>();
   const refs = new Map<CountyPiece, Binding[]>();
-  function material(key: string, build: () => T.MeshBasicMaterial) {
+  function material(key: string, build: () => T.MeshLambertMaterial) {
     if (!materials.has(key)) materials.set(key, build());
     return key;
   }
+  const buildingColors = new Map<string, number>();
   for (const box of pieces) {
+    if (!buildingColors.has(box.buildingId)) {
+      const palette = [
+        0xfff1d9, 0xf7d7c6, 0xe1eddf, 0xdae7ed, 0xf8e4bf, 0xfbf3e8,
+      ];
+      let hash = 0;
+      for (const char of box.buildingId)
+        hash = (Math.imul(hash, 31) + char.charCodeAt(0)) | 0;
+      buildingColors.set(
+        box.buildingId,
+        palette[(hash >>> 0) % palette.length],
+      );
+    }
     const shape = box.closedDoor ?? box;
     const [x, y, z] = shape.p,
       [w, h, d] = shape.s;
@@ -342,10 +361,28 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
           const mat = material("surface-" + box.frontage, () =>
             surface(box.frontage),
           );
-          part(white, x, y, z, w, h, d, mat);
+          part(buildingColors.get(box.buildingId)!, x, y, z, w, h, d, mat);
           break;
         }
         case "window": {
+          // Recessed sills and projecting brows catch the lateral sun. Each is
+          // bound to its own pane so the storefront breaks apart coherently.
+          const across = box.face === "front" || box.face === "back";
+          const outside = box.face === "front" || box.face === "right" ? 1 : -1;
+          if (box.frontage !== "works" && box.frontage !== "clock") {
+            const awning = box.frontage === "shops",
+              lip = awning ? 0.42 : 0.14;
+            part(
+              awning ? 0x57958f : linen,
+              x + (across ? 0 : outside * lip * 0.5),
+              y + h * 0.49,
+              z + (across ? outside * lip * 0.5 : 0),
+              w + (across ? 0.12 : lip),
+              awning ? 0.13 : 0.1,
+              d + (across ? lip : 0.12),
+            );
+            part(0xe2ddd3, x, y - h * 0.48, z, w + 0.1, 0.095, d + 0.1);
+          }
           const mat = material("window-" + box.frontage, () =>
             glazing(box.frontage),
           );
@@ -490,6 +527,16 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
       batch.material,
       batch.parts.length,
     );
+    mesh.receiveShadow = true;
+    mesh.castShadow =
+      !batch.material.transparent &&
+      batch.parts.some(
+        (p) =>
+          p.box.piece === "roof" ||
+          p.box.piece === "wall" ||
+          p.box.piece === "floor" ||
+          p.box.piece === "door",
+      );
     mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
     batch.parts.forEach((p, i) => {
       transform.position.set(p.x, p.y, p.z);
@@ -518,6 +565,7 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
   const animate = new Map<CountyPiece, { angle: number; target: number }>();
   const lastDoorAngle = new Map<CountyPiece, number>();
   function apply(box: CountyPiece, hidden: boolean, angle = 0) {
+    group.userData.shadowDirty = true;
     if (!hidden && box.closedDoor) lastDoorAngle.set(box, angle);
     if (angle && box.closedDoor) {
       const { p, s } = box.closedDoor,
@@ -620,6 +668,7 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
         source.material,
         items.length,
       );
+      mesh.receiveShadow = true;
       mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
       items.forEach(({ i, binding, box }, slot) => {
         original.fromArray(binding.initial, binding.index * 16);

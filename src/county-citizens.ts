@@ -1,3 +1,4 @@
+import type { CrimeState } from "./county-crime.ts";
 import type { Npc } from "../server/npcs.ts";
 import { movementYaw } from "./actor-hit.ts";
 import type { Street } from "./city-plan.ts";
@@ -18,6 +19,7 @@ interface Person {
   hp: number;
   height: number;
   notoriety?: number;
+  crime?: CrimeState;
   shieldUntil?: number;
   downUntil?: number;
 }
@@ -28,6 +30,7 @@ interface Queries {
 }
 export type CitizenAction = "shove" | "punch" | "shot" | "ram";
 interface Route {
+  report?: V3;
   road: Street;
   dir: number;
   entering: boolean;
@@ -162,7 +165,7 @@ export class CountyCitizens {
         const p = onRoute(s, dir, 0.22 + random() * 0.56, false);
         this.add(
           "civilian-walker-" + (district * 12 + i),
-          "Pedestrian",
+          i === 1 || i === 9 ? "Police officer" : "Pedestrian",
           s,
           dir,
           p,
@@ -196,7 +199,14 @@ export class CountyCitizens {
           direction = dir;
         }
       }
-      this.add(car.driver, "Motorist", closest, direction, [...car.p], index);
+      this.add(
+        car.driver,
+        car.patrol ? "Police officer" : "Motorist",
+        closest,
+        direction,
+        [...car.p],
+        index,
+      );
     }
   }
   private add(
@@ -245,9 +255,17 @@ export class CountyCitizens {
     const options = this.junctions
       .get(end.join(","))!
       .filter((s) => s !== route.road && (driving || !ruralRoad(s)));
-    route.road = options.length
-      ? options[Math.floor(route.random() * options.length)]
-      : route.road;
+    if (route.report && options.length) {
+      const report = route.report;
+      options.sort((a, b) => {
+        const exit = (s: Street) => (horizontal(s.a, end) < 0.01 ? s.b : s.a);
+        return horizontal(exit(a), report) - horizontal(exit(b), report);
+      });
+      route.road = options[0];
+    } else
+      route.road = options.length
+        ? options[Math.floor(route.random() * options.length)]
+        : route.road;
     route.dir =
       route.road.a === end || horizontal(route.road.a, end) < 0.01 ? 1 : -1;
     setGoal(route, driving, true);
@@ -270,7 +288,8 @@ export class CountyCitizens {
     let target: T | undefined,
       best = Infinity;
     for (const p of players) {
-      const level = p.notoriety ?? 0;
+      const police = a.name === "Police officer";
+      const level = police ? (p.crime?.stars ?? 0) * 35 : (p.notoriety ?? 0);
       if (
         level <= 30 ||
         !p.hp ||
@@ -281,7 +300,12 @@ export class CountyCitizens {
       const d = distance(a.p, p.p);
       const radius =
         level > 75 ? 31 : level > 50 ? 15 : a.car === undefined ? 5 : 17;
-      if (d >= radius || d >= best || !this.visible(a, p)) continue;
+      if (
+        d >= (police ? 48 + level * 0.2 : radius) ||
+        d >= best ||
+        !this.visible(a, p)
+      )
+        continue;
       target = p;
       best = d;
     }
@@ -370,6 +394,30 @@ export class CountyCitizens {
       a.targetId = target?.id;
       a.engaged =
         !!target && (target.notoriety ?? 0) > 75 && a.car === undefined;
+      const police = a.name === "Police officer";
+      if (
+        police &&
+        target &&
+        a.car !== undefined &&
+        distance(target.p, a.p) < 10 &&
+        !this.cars.some((c) => c.driver === target.id)
+      )
+        this.leaveCar(a, route);
+      // Dispatch to the reported location even before the suspect comes into sight.
+      const report =
+        police && !target
+          ? players
+              .filter((p) => p.hp > 0 && p.crime?.stars && p.crime.alert)
+              .sort(
+                (a1, b1) =>
+                  horizontal(a.p, a1.crime!.alert!) -
+                  horizontal(a.p, b1.crime!.alert!),
+              )[0]?.crime?.alert
+          : undefined;
+      route.report =
+        report && horizontal(a.p, report) < 190 ? report : undefined;
+      if (a.car !== undefined && this.cars[a.car].patrol)
+        this.cars[a.car].responding = !!(target || route.report);
       if (a.car === undefined)
         this.walk(a, route, target, players, dt, now, hurt, shot);
       else this.drive(a, route, target, players, dt, now, hurt);
@@ -377,6 +425,7 @@ export class CountyCitizens {
   }
   private leaveCar(a: CountyCitizen, r: Route) {
     const car = this.cars[a.car!];
+    if (car.patrol) car.responding = false;
     if (car.driver === a.id) car.driver = null;
     a.car = undefined;
     r.pace = 1.6;
@@ -394,7 +443,15 @@ export class CountyCitizens {
     shot: (a: CountyCitizen, to: V3) => void,
   ) {
     const d = target ? distance(a.p, target.p) : Infinity;
-    if (target && (d < 1.7 || ((target.notoriety ?? 0) > 75 && d < 30))) {
+    const police = a.name === "Police officer";
+    const armed = police
+      ? (target?.crime?.stars ?? 0) >= 3
+      : (target?.notoriety ?? 0) > 75;
+    if (police && target && d < 1.5 && !armed) {
+      a.yaw = movementYaw(target.p[0] - a.p[0], target.p[2] - a.p[2], a.yaw);
+      return;
+    }
+    if (target && ((!police && d < 1.7) || (armed && d < 30))) {
       a.yaw = movementYaw(target.p[0] - a.p[0], target.p[2] - a.p[2], a.yaw);
       if (now < r.actionAt) return;
       if (d >= 1.7) {
@@ -418,15 +475,21 @@ export class CountyCitizens {
       }
       return;
     }
-    const goal = target?.p ?? r.goal;
-    if (!target && horizontal(a.p, goal) < 0.5) {
+    const search =
+      r.report && horizontal(a.p, r.report) < 22 ? r.report : undefined;
+    if (!target && search && horizontal(a.p, search) < 1) return;
+    const goal = target?.p ?? search ?? r.goal;
+    if (!target && !search && horizontal(a.p, goal) < 0.5) {
       this.nextRoad(r, false);
       return;
     }
     const len = Math.max(0.001, horizontal(a.p, goal));
     const dx = (goal[0] - a.p[0]) / len,
       dz = (goal[2] - a.p[2]) / len;
-    const step = Math.min(len, (target ? 3.1 : r.pace) * dt);
+    const step = Math.min(
+      len,
+      (target ? (police ? 4.7 : 3.1) : r.report ? 3.8 : r.pace) * dt,
+    );
     const from = a.p;
     const next: V3 = [from[0] + dx * step, from[1], from[2] + dz * step];
     const clearance = 0.48;
@@ -479,8 +542,9 @@ export class CountyCitizens {
       (target.notoriety ?? 0) > 75 &&
       Math.abs(target.p[1] - car.p[1]) < 2.5;
     let goal = r.goal;
-    if (target && (ram || otherCar)) {
-      const lead = ram ? 0 : 5.5;
+    const pursuing = a.name === "Police officer" && !!target;
+    if (target && (ram || otherCar || pursuing)) {
+      const lead = ram || pursuing ? 0 : 5.5;
       goal = [
         target.p[0] - Math.sin(otherCar?.yaw ?? 0) * lead,
         target.p[1],
@@ -508,7 +572,7 @@ export class CountyCitizens {
     const dx = -Math.sin(yaw) * gear,
       dz = -Math.cos(yaw) * gear;
     const pace =
-      (reversing ? 2.2 : ram ? 14 : r.pace) *
+      (reversing ? 2.2 : pursuing ? 19 : ram ? 14 : r.pace) *
       Math.max(0.31, 1 - Math.abs(turn) * 0.58);
     const step = Math.min(len, pace * dt);
     const next: V3 = [car.p[0] + dx * step, 0.08, car.p[2] + dz * step];

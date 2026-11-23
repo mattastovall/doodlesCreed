@@ -148,7 +148,7 @@ NPC presence is bounded to a 100 m player radius. Solo NPCs outside it are remov
 ### Switchback County
 
 Choose **Switchback County** from the main menu, or open `/?mode=county`.
-Start on foot with the usual weapons, movement and shared enemy waves. Approach a parked car
+Start on foot among pedestrians, motorists and police patrols. Approach a parked car
 and press E to drive. Use W/S to accelerate or reverse, A/D to steer and Space to brake.
 The fleet includes saloons, coupes, family minivans, taxis and compact delivery vans. Look for a taxi rank near town hall or a delivery van at the market. Press V to switch between the chase camera and the driver’s seat. In the cockpit, use the mouse to look around. Press E again to open the driver’s door and return to foot combat. Westhaven and Eastbank share a highway with open
 highlands on either side. Each public county holds up to 30 human players. Rust remains available from the main menu.
@@ -160,7 +160,7 @@ To benchmark a structural collapse at a fixed 1280 × 720 resolution, run `COUNT
 To exercise capacity on an empty local development server, run
 `COUNTY_TEST_WS=ws://127.0.0.1:4173/ws node scripts/county-load.mjs`.
 
-The towns mix sawtooth workshops, row houses, cinemas, clock halls and stepped office towers. Wave enemies can circle, back away and fire in short bursts. Free roam has no enemies.
+The towns mix sawtooth workshops, row houses, cinemas, clock halls and stepped office towers under a coastal sunset. Both solo and multiplayer County have robberies. Follow a green **$** on the map, stand at the counter and press **G**. Stay for three seconds to collect the take. The alarm raises your wanted level. Breaking police sight long enough banks the money. Sustained contact with a foot patrol can lead to arrest and loss of the unbanked take. At three stars, officers can use firearms. When clear of police, press **B** at a till to spend $100 of banked cash on first aid. Cash belongs to the current match.
 
 To check the chase camera over a driving route, run
 `COUNTY_TEST_ORIGIN=http://127.0.0.1:4173 node scripts/county-driving-check.mjs` against the dev server. On Linux with desktop OpenGL available, set `COUNTY_HARDWARE_GL=1` for hardware frame timings.

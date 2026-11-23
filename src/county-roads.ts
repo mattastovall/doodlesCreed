@@ -5,7 +5,11 @@ import type { V3 } from "./world.ts";
 
 // The shoulders, crossings, light poles and lanes all use the same surveyed
 // centerlines as parked vehicles and pedestrian navigation.
-export function drawCountyRoads(group: T.Group, streets: Street[]) {
+export function drawCountyRoads(
+  group: T.Group,
+  streets: Street[],
+  textures: { asphalt: T.Texture; concrete: T.Texture },
+) {
   const shoulders: number[] = [],
     asphalt: number[] = [],
     paint: number[] = [],
@@ -147,17 +151,37 @@ export function drawCountyRoads(group: T.Group, streets: Street[]) {
     circle(asphalt, p, width / 2, 0.048);
   }
   for (const [positions, tint] of [
-    [shoulders, 0xe0ded3],
-    [asphalt, 0xc9d0da],
+    [shoulders, 0xffffff],
+    [asphalt, 0xffffff],
     [paint, 0xfbf9f1],
-    [center, 0xe9ddbf],
+    [center, 0xe5b45b],
   ] as const) {
     const geometry = new T.BufferGeometry();
     geometry.setAttribute(
       "position",
       new T.Float32BufferAttribute(positions, 3),
     );
-    group.add(new T.Mesh(geometry, new T.MeshBasicMaterial({ color: tint })));
+    const map =
+      positions === asphalt
+        ? textures.asphalt
+        : positions === shoulders
+          ? textures.concrete
+          : null;
+    if (map) {
+      const uv: number[] = [];
+      for (let i = 0; i < positions.length; i += 3)
+        uv.push(positions[i] * 0.23, positions[i + 2] * 0.23);
+      geometry.setAttribute("uv", new T.Float32BufferAttribute(uv, 2));
+    }
+    const normals = new Float32Array(positions.length);
+    for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
+    geometry.setAttribute("normal", new T.BufferAttribute(normals, 3));
+    const mesh = new T.Mesh(
+      geometry,
+      new T.MeshLambertMaterial({ color: tint, map }),
+    );
+    mesh.receiveShadow = true;
+    group.add(mesh);
   }
   return lamps;
 }

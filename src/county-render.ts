@@ -1,3 +1,5 @@
+import { countySky, countyTextures, coastSun } from "./county-atmosphere.ts";
+import { palmGeometry } from "./county-palm.ts";
 import { loadFleet } from "./county-car.ts";
 import { isCountyPiece } from "./county-architecture.ts";
 import { countyBuildings } from "./county-buildings.ts";
@@ -10,9 +12,7 @@ import { drawCountyRoads } from "./county-roads.ts";
 import { randomSeed, type City } from "./world.ts";
 
 export async function drawCounty(city: City, group: T.Group) {
-  const loader = new GLTFLoader(),
-    mat = inkMaterial(INK, 0.025);
-  mat.uniforms.uSurface.value = 1.7;
+  const loader = new GLTFLoader();
   async function geometry(name: string) {
     const model = await loader.loadAsync(assetUrl("models/" + name + ".glb"));
     const mesh = model.scene.getObjectByProperty("isMesh", true) as T.Mesh;
@@ -21,63 +21,75 @@ export async function drawCounty(city: City, group: T.Group) {
     geo.computeBoundingBox();
     return geo;
   }
-  // Terrain lighting is static, so bake its cel shading into vertex colors.
-  const terrainTint = new T.MeshBasicMaterial({ vertexColors: true });
+  const textures = await countyTextures();
+  const terrainTint = new T.MeshLambertMaterial({ map: textures.scrubland });
   const normal = new T.Vector3(),
-    sun = new T.Vector3(-0.55, 1, 0.35).normalize();
-  const paper = new T.Color(0xf4f2e8),
-    blue = new T.Color(0x9daac7),
-    color = new T.Color();
+    sun = coastSun;
+  group.add(countySky(textures.sky));
   countyBuildings(group, city.boxes.filter(isCountyPiece));
   const [vehicle, lamp, rock] = await Promise.all([
-    loadFleet(),
+    loadFleet(textures.sky),
     geometry("lamp"),
     geometry("outcrop"),
   ]);
   for (const box of city.boxes) {
-    if (!box.mesh || box.piece) continue;
+    if (box.kind !== "ground") continue;
     const geo = new T.BufferGeometry();
-    geo.setAttribute(
-      "position",
-      new T.Float32BufferAttribute(box.mesh.vertices, 3),
-    );
-    geo.setIndex(box.mesh.indices);
+    const [cx, cy, cz] = box.p,
+      [w, h, d] = box.s;
+    const vertices = box.mesh?.vertices ?? [
+      cx - w / 2,
+      cy + h / 2,
+      cz - d / 2,
+      cx - w / 2,
+      cy + h / 2,
+      cz + d / 2,
+      cx + w / 2,
+      cy + h / 2,
+      cz + d / 2,
+      cx + w / 2,
+      cy + h / 2,
+      cz - d / 2,
+    ];
+    geo.setAttribute("position", new T.Float32BufferAttribute(vertices, 3));
+    geo.setIndex(box.mesh?.indices ?? [0, 1, 2, 0, 2, 3]);
     geo.computeVertexNormals();
-    const normals = geo.getAttribute("normal"),
-      colors = [];
-    for (let i = 0; i < normals.count; i++) {
-      normal.fromBufferAttribute(normals, i);
-      const light = normal.dot(sun);
-      color
-        .copy(paper)
-        .lerp(blue, light > 0.8 ? 0.05 : light > 0.56 ? 0.22 : 0.45);
-      colors.push(color.r, color.g, color.b);
-    }
-    geo.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
-    group.add(new T.Mesh(geo, terrainTint));
+    const uv: number[] = [];
+    for (let i = 0; i < vertices.length; i += 3)
+      uv.push(vertices[i] / 18, vertices[i + 2] / 18);
+    geo.setAttribute("uv", new T.Float32BufferAttribute(uv, 2));
+    const hill = new T.Mesh(geo, terrainTint);
+    hill.receiveShadow = true;
+    group.add(hill);
   }
   const cars = countyCars().map((c, i) => {
     const m = vehicle(
       c.kind,
       c.kind === "taxi" ? 1 : c.kind === "delivery" ? 3 : i,
+      c.patrol,
     );
     m.rotation.y = c.yaw;
     m.position.fromArray(c.p);
     group.add(m);
     return m;
   });
-  const lightPositions = drawCountyRoads(group, city.plan.streets);
+  const lightPositions = drawCountyRoads(group, city.plan.streets, textures);
   const rng = randomSeed("county-landscape");
   const matrix = new T.Object3D();
-  const lamps = new T.InstancedMesh(lamp, mat, lightPositions.length);
+  const lamps = new T.InstancedMesh(
+    lamp,
+    new T.MeshLambertMaterial({ color: 0x647786 }),
+    lightPositions.length,
+  );
   lightPositions.forEach((p, i) => {
     matrix.position.fromArray(p);
     matrix.updateMatrix();
     lamps.setMatrixAt(i, matrix.matrix);
   });
+  lamps.castShadow = true;
   group.add(lamps);
   const trunkGeo = new T.CylinderGeometry(0.14, 0.24, 3.3, 8);
-  const trunkMat = new T.MeshBasicMaterial({ color: 0x7887a5 });
+  const trunkMat = new T.MeshBasicMaterial({ color: 0x776d65 });
   const crown = new T.SphereGeometry(1, 14, 9),
     colors = [];
   const vertex = crown.getAttribute("position"),
@@ -91,7 +103,7 @@ export async function drawCounty(city: City, group: T.Group) {
       0.08 * Math.sin(7 * z - 4 * y);
     vertex.setXYZ(i, x * radius, y * radius, z * radius);
     const light = normal.dot(sun) + 0.12 * Math.sin(x * 7 + y * 4);
-    leaf.setHex(light > 0.55 ? 0xe3e7e1 : light > -0.12 ? 0xb9c7d4 : 0x90a2ba);
+    leaf.setHex(light > 0.55 ? 0x89a476 : light > -0.12 ? 0x618367 : 0x48695d);
     colors.push(leaf.r, leaf.g, leaf.b);
   }
   crown.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
@@ -102,10 +114,32 @@ export async function drawCounty(city: City, group: T.Group) {
     if (!cells.has(cell)) cells.set(cell, []);
     cells.get(cell)!.push(tree);
   }
+  const palm = palmGeometry(),
+    palmMat = new T.MeshLambertMaterial({
+      vertexColors: true,
+      side: T.DoubleSide,
+    });
   for (const trees of cells.values()) {
-    const trunks = new T.InstancedMesh(trunkGeo, trunkMat, trees.length),
-      leaves = new T.InstancedMesh(crown, leafMat, trees.length);
-    trees.forEach(({ p }, i) => {
+    const palms = trees.filter(
+      (b) => Math.sin(b.p[0] * 2.7 + b.p[2] * 0.32) > -0.45,
+    );
+    if (palms.length) {
+      const instances = new T.InstancedMesh(palm, palmMat, palms.length);
+      for (const [i, tree] of palms.entries()) {
+        matrix.position.set(tree.p[0], 0, tree.p[2]);
+        matrix.rotation.set(0, rng() * Math.PI * 2, 0);
+        matrix.scale.setScalar(0.86 + rng() * 0.36);
+        matrix.updateMatrix();
+        instances.setMatrixAt(i, matrix.matrix);
+      }
+      instances.castShadow = true;
+      group.add(instances);
+    }
+    const broadleaf = trees.filter((b) => !palms.includes(b));
+    if (!broadleaf.length) continue;
+    const trunks = new T.InstancedMesh(trunkGeo, trunkMat, broadleaf.length),
+      leaves = new T.InstancedMesh(crown, leafMat, broadleaf.length);
+    broadleaf.forEach(({ p }, i) => {
       matrix.position.set(p[0], 1.65, p[2]);
       matrix.scale.set(1, 1, 1);
       matrix.updateMatrix();
@@ -117,13 +151,50 @@ export async function drawCounty(city: City, group: T.Group) {
       matrix.updateMatrix();
       leaves.setMatrixAt(i, matrix.matrix);
     });
+    trunks.castShadow = leaves.castShadow = true;
     group.add(trunks, leaves);
   }
+  // Low scrub lives off-road, in clusters on the hillsides. Each terrain
+  // cell uses one culled draw and contains no new gameplay obstacles.
+  const brush = new T.IcosahedronGeometry(1, 0),
+    brushMat = new T.MeshLambertMaterial({
+      color: 0x819369,
+      flatShading: true,
+    });
+  for (let tx = -800; tx < 800; tx += 160)
+    for (let tz = -800; tz < 800; tz += 160) {
+      const transforms: T.Matrix4[] = [];
+      for (let i = 0; i < 15; i++) {
+        const x = tx + rng() * 160,
+          z = tz + rng() * 160;
+        if (elevation(x, z) < 2) continue;
+        for (let j = 0; j < 6; j++) {
+          const bx = x + (rng() - 0.5) * 11,
+            bz = z + (rng() - 0.5) * 11,
+            s = 0.45 + rng();
+          matrix.position.set(bx, elevation(bx, bz) + 0.16, bz);
+          matrix.rotation.set(0, rng() * 6.28, 0);
+          matrix.scale.set(s * 1.45, s * 0.53, s * 0.97);
+          matrix.updateMatrix();
+          transforms.push(matrix.matrix.clone());
+        }
+      }
+      if (transforms.length) {
+        const instances = new T.InstancedMesh(
+          brush,
+          brushMat,
+          transforms.length,
+        );
+        transforms.forEach((m, i) => instances.setMatrixAt(i, m));
+        group.add(instances);
+      }
+    }
+  const stoneMat = new T.MeshLambertMaterial({ color: 0x9e9b88 });
   for (let i = 0; i < 150;) {
     const x = (rng() - 0.5) * 1560,
       z = (rng() - 0.5) * 1560;
     if (elevation(x, z) < 1) continue;
-    const stone = new T.Mesh(rock, mat);
+    const stone = new T.Mesh(rock, stoneMat);
     stone.position.set(x, elevation(x, z) - 0.3, z);
     stone.rotation.y = rng() * Math.PI * 2;
     stone.scale.setScalar(

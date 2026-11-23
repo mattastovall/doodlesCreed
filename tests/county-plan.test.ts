@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Group, Mesh, Vector3 } from "three";
+import { Group, Mesh, Texture, Vector3 } from "three";
 import { Spatial } from "../server/spatial.ts";
 import { countyWorld } from "../src/county.ts";
 import {
@@ -88,7 +88,10 @@ test("the asphalt batch follows oblique streets at their surveyed width", () => 
   };
   const group = new Group();
   try {
-    drawCountyRoads(group, [s]);
+    drawCountyRoads(group, [s], {
+      asphalt: new Texture(),
+      concrete: new Texture(),
+    });
     const mesh = group.children[1] as Mesh;
     const positions = mesh.geometry.getAttribute("position");
     const vertices = [0, 1, 2].map((i) =>

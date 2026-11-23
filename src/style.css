@@ -1557,3 +1557,17 @@ dialog .help-grid span {
 dialog .error:empty {
   display: none;
 }
+
+#hud.county-hud
+  :is(.hud-bottom-left, .hud-bottom-right, .hud-bottom-center, .escape-tip) {
+  color: #fffcf1;
+  text-shadow:
+    0 1px 2px #172638,
+    0 0 4px #172638;
+}
+#hud.county-hud #weapon-slots {
+  opacity: 0.94;
+}
+#hud.county-hud #weapon-slots .active {
+  border-color: #ffdf95;
+}
