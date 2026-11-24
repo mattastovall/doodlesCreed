@@ -1,3 +1,5 @@
+import { vehicleEntersRunner } from "./county-pedestrian-collision.ts";
+import { FISTS } from "./fists.ts";
 import { besideCar } from "./county-car-access.ts";
 import type { CrimeState } from "./county-crime.ts";
 import type { Npc } from "../server/npcs.ts";
@@ -85,14 +87,14 @@ function newCitizen(id: string, name: string, p: V3): CountyCitizen {
     hp: 100,
     kills: 0,
     deaths: 0,
-    weapon: 2,
+    weapon: name === "Police officer" ? 2 : FISTS,
     height: 1.76,
     anchor: null,
     lastMove: 0,
     lastShot: 0,
     deadAt: 0,
     shieldUntil: 0,
-    owned: [2],
+    owned: name === "Police officer" ? [FISTS, 2] : [FISTS],
     mags: [30, 8, 14, 5],
     reloadUntil: 0,
     reloadWeapon: 0,
@@ -365,6 +367,8 @@ export class CountyCitizens {
           route.dir = 1;
         }
         a.hp = 100;
+        a.weapon = a.name === "Police officer" ? 2 : FISTS;
+        a.owned = a.weapon === FISTS ? [FISTS] : [FISTS, 2];
         a.deadAt = 0;
         a.downUntil = 0;
         a.fall = undefined;
@@ -462,6 +466,10 @@ export class CountyCitizens {
     const armed = police
       ? (target?.crime?.stars ?? 0) >= 3
       : (target?.notoriety ?? 0) > 75;
+    if (armed && a.weapon === FISTS) {
+      a.weapon = 2;
+      a.owned.push(2);
+    }
     if (police && target && d < 1.5 && !armed) {
       a.yaw = movementYaw(target.p[0] - a.p[0], target.p[2] - a.p[2], a.yaw);
       return;
@@ -605,6 +613,12 @@ export class CountyCitizens {
       r.actionAt = now + 2600;
     }
     const blocked =
+      vehicleEntersRunner(
+        car,
+        { p: next, yaw, kind: car.kind },
+        players,
+        car.driver,
+      ) ||
       this.cars.some(
         (c) => c !== car && (nearCar(nose, c, 0.72) || nearCar(next, c, 0.72)),
       ) ||

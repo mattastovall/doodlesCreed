@@ -8,7 +8,11 @@ import { COUNTY } from "../src/county.ts";
 import { FISTS } from "../src/fists.ts";
 import { generateLevel } from "../src/levels.ts";
 import { Controller, Physics } from "../src/physics.ts";
-import { PICKUP_RADIUS, weaponPickups } from "../src/weapon-pickups.ts";
+import {
+  NpcLoot,
+  PICKUP_RADIUS,
+  weaponPickups,
+} from "../src/weapon-pickups.ts";
 import { distance } from "../src/world.ts";
 
 for (const seed of [COUNTY, "rust", "city:paper"])
@@ -57,4 +61,16 @@ test("solo pickup unlocks and equips the gun on foot", async () => {
     combat.dispose();
     physics.dispose();
   }
+});
+
+test("NPC loot ignores fists, expires, and caps unclaimed weapons", () => {
+  const loot = new NpcLoot();
+  loot.spawn([0, 0, 0], FISTS, 0);
+  assert.equal(loot.drops.length, 0);
+  for (let i = 0; i < 35; i++) loot.spawn([i, 0, 0], 2, 0);
+  assert.equal(loot.drops.length, 32);
+  assert.equal(loot.drops[0].p[0], 3);
+  assert.equal(loot.collect([4, 0, 0], [2], 500), undefined);
+  assert.equal(loot.collect([4, 0, 0], [], 60000), undefined);
+  assert.equal(loot.drops.length, 0);
 });

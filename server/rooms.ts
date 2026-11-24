@@ -1,6 +1,8 @@
+import { insideVehicle } from "../src/county-pedestrian-collision.ts";
 import { windowPassage } from "../src/window-vault.ts";
 import {
   advanceSeatAction,
+  exitCarPosition,
   besideCar,
   canReachCar,
   startSeatAction,
@@ -45,6 +47,7 @@ import { insideRust, RUST_SCALE } from "../src/rust-boundary.ts";
 import { peekEye, validatedLean } from "../src/cover-peek.ts";
 import {
   MAGAZINES,
+  NpcLoot,
   newInventory,
   PICKUP_RADIUS,
   weaponPickups,
@@ -108,6 +111,7 @@ export interface ReserveRequest {
 }
 interface Room {
   weaponDrops: WeaponPickup[];
+  npcLoot: NpcLoot;
   citizens?: CountyCitizens;
   shops?: CountyShops;
   incidents?: CountyImpacts;
@@ -171,6 +175,15 @@ export class Rooms {
     p.yaw = car.yaw;
     p.pitch = 0;
   }
+  private exitPosition(r: Room, car: CountyCar, height: number) {
+    return exitCarPosition(
+      car,
+      (p) =>
+        r.spatial.clear(p, height) &&
+        r.spatial.movement(car.p, p, height) &&
+        !r.cars!.some((other) => insideVehicle(other, p, height)),
+    );
+  }
   private advanceSeats(r: Room, now: number) {
     r.cars?.forEach((car, index) => {
       const work = car.interaction;
@@ -184,7 +197,17 @@ export class Rooms {
         pair[1].hp > 0 &&
         canReachCar(car, pair[1].p) &&
         !r.cars!.some((other) => other.driver === work.actor);
-      const result = advanceSeatAction(car, eligible, now);
+      const displacedPlayer =
+        work.occupant &&
+        [...r.players.values()].find((p) => p.id === work.occupant);
+      const landing = displacedPlayer
+        ? this.exitPosition(r, car, displacedPlayer.height)
+        : undefined;
+      const result = advanceSeatAction(
+        car,
+        eligible && (!displacedPlayer || !!landing),
+        now,
+      );
       if (!result) return;
       if (result === "hijack" && work.occupant) {
         r.citizens?.ejectDriver(work.occupant);
@@ -194,10 +217,7 @@ export class Rooms {
         if (displaced) {
           const [socket, driver] = displaced;
           this.drivers.delete(driver);
-          const landing = besideCar(car);
-          driver.p = r.spatial.clear(landing, driver.height)
-            ? landing
-            : [...car.p];
+          driver.p = landing!;
           send(socket, { type: "vehicle-seat", index, car, ejected: driver.p });
         }
       }
@@ -441,6 +461,7 @@ export class Rooms {
           ? new Npcs(city, spatial)
           : null;
       room = {
+        npcLoot: new NpcLoot(),
         weaponDrops: weaponPickups(city),
         cars: seed === COUNTY ? countyCars() : undefined,
         roomId: randomUUID(),
@@ -563,6 +584,7 @@ export class Rooms {
       room.city.boxes,
       () => room.wreckage!.clusters.values(),
       () => room.cars!,
+      () => room.players.values(),
     );
     room.structures = new CountyStructures(
       room.city.boxes,
@@ -598,6 +620,7 @@ export class Rooms {
       ...p,
       rubble: r.wreckage && [...r.wreckage.clusters.values()],
       structures: r.structures && [...r.structures.states],
+      npcDrops: r.npcLoot.drops,
       sessionExpiresIn: this.sessions.resumeMs,
       reloadRemaining: Math.max(0, p.reloadUntil - Date.now()),
       fireRemaining: Math.max(
@@ -695,6 +718,9 @@ export class Rooms {
     this.lastTick = stamp;
     this.prune();
     for (const r of this.rooms.values()) {
+      const lootRevision = r.npcLoot.revision;
+      r.npcLoot.expire(now);
+      if (r.npcLoot.revision !== lootRevision) this.broadcastLoot(r);
       r.wreckage?.step(dt);
       if (this.tickCount % 2 === 0 && r.rubbleUpdates?.size) {
         this.broadcast(r, {
@@ -717,7 +743,7 @@ export class Rooms {
             if (kind === "shove" && !r.cars?.some((c) => c.driver === p.id)) {
               const dest = shovePosition(p.p, bot.p);
               if (
-                r.spatial.movement(p.p, dest, p.height) &&
+                r.spatial.movement(p.p, dest, p.height, r.cars) &&
                 r.spatial.clear(dest, p.height)
               ) {
                 p.p = dest;
@@ -976,6 +1002,17 @@ export class Rooms {
     });
     if (!victim.hp) {
       victim.deadAt = Date.now();
+      if (victim.npc && victim.weapon !== FISTS) {
+        const car = r.cars?.find((car) => car.driver === victim.id);
+        r.npcLoot.spawn(
+          car
+            ? (this.exitPosition(r, car, victim.height) ?? besideCar(car))
+            : victim.p,
+          victim.weapon,
+          victim.deadAt,
+        );
+        this.broadcastLoot(r);
+      }
       victim.deaths++;
       attacker.kills++;
       this.broadcast(r, {
@@ -984,6 +1021,9 @@ export class Rooms {
         victim: victim.name,
       });
     }
+  }
+  private broadcastLoot(r: Room) {
+    this.broadcast(r, { type: "npc-loot", npcDrops: r.npcLoot.drops });
   }
   roster(r: Room) {
     this.broadcast(r, {
@@ -1005,6 +1045,7 @@ export class Rooms {
       }
       if (ws.bufferedAmount >= 32768) {
         if (
+          m.type === "npc-loot" ||
           m.type === "roster" ||
           m.type === "structure" ||
           m.type === "rubble-spawn" ||
@@ -1182,6 +1223,7 @@ export class Rooms {
             ? new Npcs(city, spatial)
             : null;
         r = {
+          npcLoot: new NpcLoot(),
           weaponDrops: weaponPickups(city),
           cars: seed === COUNTY ? countyCars() : undefined,
           roomId: randomUUID(),
@@ -1260,6 +1302,7 @@ export class Rooms {
             )
           : {}),
         type: "welcome",
+        npcDrops: r.npcLoot.drops,
         rubble: r.wreckage && [...r.wreckage.clusters.values()],
         structures: r.structures && [...r.structures.states],
         id: p.id,
@@ -1357,10 +1400,15 @@ export class Rooms {
       const car = Number.isInteger(m.index) ? r.cars[m.index] : undefined;
       const action = m.action ?? (vehicle ? "exit" : "enter");
       let result;
+      let landing: V3 | undefined;
       if (car && p.hp > 0) {
         if (action === "exit" && vehicle === car) {
-          car.driver = null;
-          this.drivers.delete(p);
+          landing = this.exitPosition(r, car, p.height);
+          if (landing) {
+            p.p = landing;
+            car.driver = null;
+            this.drivers.delete(p);
+          }
         }
         if (
           action === "confirm" &&
@@ -1392,6 +1440,7 @@ export class Rooms {
         type: "vehicle-seat",
         driveVersion: this.drivers.has(p) ? 1 : undefined,
         index: m.index,
+        landing,
         result,
         car: car ?? null,
       });
@@ -1429,7 +1478,7 @@ export class Rooms {
         displacement > p.moveCredit ||
         !(vehicle && r.driving
           ? r.driving.legacyClear(p.p, p.yaw, m.p, m.yaw, vehicle.kind, vehicle)
-          : r.spatial.movement(p.p, m.p, p.height)) ||
+          : r.spatial.movement(p.p, m.p, p.height, r.cars)) ||
         m.p[1] < -5 ||
         m.p[1] > r.city.flightCeiling ||
         Math.abs(m.p[0]) > r.city.bounds ||
@@ -1452,17 +1501,22 @@ export class Rooms {
       p.pitch = Math.max(-1.5, Math.min(1.5, m.pitch));
       let nextWeapon = p.owned.includes(m.weapon) ? m.weapon : p.weapon;
       if (!vehicle && ws.bufferedAmount < 32768) {
-        const drop = r.weaponDrops.find(
-          (site) =>
-            !p.owned.includes(site.weapon) &&
-            distance(site.p, p.p) <= PICKUP_RADIUS,
-        );
+        const revision = r.npcLoot.revision;
+        const dropped = r.npcLoot.collect(p.p, p.owned, now);
+        const drop =
+          dropped ??
+          r.weaponDrops.find(
+            (site) =>
+              !p.owned.includes(site.weapon) &&
+              distance(site.p, p.p) <= PICKUP_RADIUS,
+          );
         if (drop) {
           p.owned.push(drop.weapon);
           p.mags[drop.weapon] = MAGAZINES[drop.weapon];
           nextWeapon = drop.weapon;
           send(ws, { type: "weapon-pickup", weapon: drop.weapon });
         }
+        if (revision !== r.npcLoot.revision) this.broadcastLoot(r);
       }
       if (nextWeapon !== p.weapon) {
         p.reloadUntil = 0;

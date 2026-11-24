@@ -158,6 +158,34 @@ test("room owns civilian and player hijacks, rejects competing claims, distance 
     }
     assert.equal(parked.access, "open");
     assert.equal(parked.driver, first.id);
+    // Isolate the network seat and walking checks from buildings and terrain.
+    first.p = parked.p = [120, 40, 120];
+    parked.yaw = 0;
+    request("exit");
+    assert.equal(parked.driver, null);
+    const outside = [...first.p];
+    assert.ok(Math.abs(outside[0] - parked.p[0]) > 2);
+    const walk = (p: number[]) =>
+      rooms.handle(firstSocket, {
+        type: "state",
+        vehicle: -1,
+        p,
+        yaw: 0,
+        pitch: 0,
+      });
+    first.moveCredit = 8;
+    walk([2 * parked.p[0] - outside[0], outside[1], outside[2]]);
+    assert.deepEqual(
+      first.p,
+      outside,
+      "a single on-foot sample cannot cross the chassis",
+    );
+    walk([outside[0], outside[1], outside[2] + 0.5]);
+    assert.equal(
+      first.p[2],
+      outside[2] + 0.5,
+      "the exited driver can immediately walk alongside the car",
+    );
   } finally {
     clients.forEach((ws) => ws.close());
     rooms.dispose();

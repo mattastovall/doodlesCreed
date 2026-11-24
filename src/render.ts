@@ -1,3 +1,4 @@
+import { coastSun } from "./county-atmosphere.ts";
 import { blimpPosition, type Blimp } from "./aerial.ts";
 import * as T from "three";
 import { type City, type Box, type V3, randomSeed } from "./world.ts";
@@ -114,10 +115,14 @@ export class Renderer {
   });
   private inkScene = new T.Scene();
   private inkCamera = new T.Camera();
+  private sunInView = new T.Vector3();
+  private motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
   private inkPost = new T.ShaderMaterial({
     uniforms: {
       color: { value: null },
       groundAware: { value: 0 },
+      sunUv: { value: new T.Vector2() },
+      sunEffects: { value: 0 },
       depth: { value: null },
       pixel: { value: new T.Vector2(1, 1) },
       ink: { value: new T.Color(INK) },
@@ -125,13 +130,48 @@ export class Renderer {
     },
     vertexShader: `varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}`,
     fragmentShader: `varying vec2 vUv;uniform sampler2D color;uniform sampler2D depth;uniform vec2 pixel;uniform vec3 ink;uniform vec2 clip;uniform float groundAware;
+    uniform vec2 sunUv;
+    uniform float sunEffects;
+    float skyAt(vec2 uv){return step(1.-0.000001,texture2D(depth,uv).x);}
+    vec3 sunOptics(vec2 uv) {
+      if(sunEffects == 0.) return vec3(0.);
+      vec2 aspect=vec2(pixel.y/pixel.x,1.);
+      vec2 delta=(uv-sunUv)*aspect;
+      float r=length(delta);
+      vec2 rim=min(sunUv,1.-sunUv);
+      float fade=smoothstep(.003,.045,min(rim.x,rim.y));
+      // Sample the solar disc, independent of the pixel receiving the flare.
+      vec2 aperture=.0025/aspect;
+      float visible=.25*(skyAt(sunUv+aperture)+skyAt(sunUv-aperture)
+                       +skyAt(sunUv+vec2(-aperture.x,aperture.y))
+                       +skyAt(sunUv+vec2(aperture.x,-aperture.y)));
+      if(visible == 0.) return vec3(0.);
+      vec3 optics=vec3(1.,.75,.41)*(.58*exp(-r*r*15000.)+.15*exp(-r*12.));
+      if(sunEffects > 1.) {
+        if(r < .45) {
+          // Integrate sky and bright cloud gaps along the line to the sun.
+          float rays=0.;
+          for(int i=0;i<6;i++){
+            vec2 tap=mix(sunUv,uv,(float(i)+.5)/6.);
+            rays+=skyAt(tap)*smoothstep(.22,.65,dot(texture2D(color,tap).rgb,vec3(.21,.72,.07)));
+          }
+          optics+=vec3(1.,.78,.45)*(rays/6.)*.18*exp(-r*5.)*(1.-smoothstep(.34,.45,r));
+        }
+        vec2 axis=vec2(.5)-sunUv;
+        float ghost=length((uv-(sunUv+axis*1.45))*aspect);
+        float ring=length((uv-(sunUv+axis*2.1))*aspect);
+        optics+=vec3(.24,.75,.64)*.045*(1.-smoothstep(.022,.032,ghost))
+               +vec3(.97,.55,.25)*.035*(1.-smoothstep(.001,.008,abs(ring-.052)));
+      }
+      return optics*visible*fade;
+    }
     float distanceAt(vec2 uv){float d=texture2D(depth,uv).x;return (clip.x*clip.y)/(clip.y-d*(clip.y-clip.x));}
     void main(){vec3 c=texture2D(color,vUv).rgb;float z=distanceAt(vUv);float edge=0.;
     if(groundAware<.5)for(int i=0;i<4;i++){vec2 dir=i==0?vec2(1.,0.):i==1?vec2(-1.,0.):i==2?vec2(0.,1.):vec2(0.,-1.);float other=distanceAt(vUv+dir*pixel*1.15);edge=max(edge,smoothstep(.012,.035,abs(z-other)/max(z,.1)));}
     if(groundAware>.5){edge=0.;for(int i=0;i<2;i++){vec2 dir=i==0?vec2(1.,0.):vec2(0.,1.);float a=distanceAt(vUv+dir*pixel*1.15),b=distanceAt(vUv-dir*pixel*1.15);float bend=abs(2./z-1./a-1./b)*z;edge=max(edge,smoothstep(.012,.035,bend));}}
 
     float grain=fract(sin(dot(gl_FragCoord.xy,vec2(12.9898,78.233)))*43758.5453);
-    c=mix(c,ink,edge*(.68+grain*.2)*(1.-smoothstep(45.,140.,z)));gl_FragColor=vec4(c,1.);
+    c=mix(c,ink,edge*(.68+grain*.2)*(1.-smoothstep(45.,140.,z)));gl_FragColor=vec4(c+sunOptics(vUv),1.);
     #include <colorspace_fragment>
     }`,
     depthTest: false,
@@ -778,7 +818,7 @@ export class Renderer {
       this.frameCost = 0.025;
     }
   }
-  draw(time: number, aerialTime = Date.now() / 1000) {
+  draw(time: number, aerialTime = Date.now() / 1000, reducedMotion = false) {
     for (const { model, path } of this.blimpMeshes) {
       model.position.set(...blimpPosition(path, aerialTime));
       model.visible =
@@ -819,6 +859,23 @@ export class Renderer {
     this.inkPost.uniforms.clip.value.set(this.camera.near, this.camera.far);
     this.renderer.setRenderTarget(this.inkTarget);
     this.renderer.render(this.scene, this.camera);
+    const optics = this.inkPost.uniforms;
+    optics.sunEffects.value = 0;
+    if (this.county && !reducedMotion && !this.motionPreference.matches) {
+      this.sunInView
+        .copy(coastSun)
+        .transformDirection(this.camera.matrixWorldInverse);
+      if (this.sunInView.z < 0) {
+        this.sunInView.applyMatrix4(this.camera.projectionMatrix);
+        if (Math.abs(this.sunInView.x) < 1 && Math.abs(this.sunInView.y) < 1) {
+          optics.sunUv.value.set(
+            this.sunInView.x * 0.5 + 0.5,
+            this.sunInView.y * 0.5 + 0.5,
+          );
+          optics.sunEffects.value = this.qualityHigh ? 2 : 1;
+        }
+      }
+    }
     this.renderer.setRenderTarget(null);
     this.renderer.render(this.inkScene, this.inkCamera);
   }

@@ -1,8 +1,11 @@
+import { insideVehicle } from "./county-pedestrian-collision.ts";
 import {
   ACCESS_WINDOW,
   ACCESS_MS,
   advanceSeatAction,
   canReachCar,
+  exitCarPosition,
+  besideCar,
   seatAction,
   startSeatAction,
 } from "./county-car-access.ts";
@@ -141,6 +144,11 @@ class Game {
       );
     if (before > 0 && !actor.hp) {
       actor.deadAt = Date.now();
+      this.combat.npcLoot.spawn(
+        actor.car === undefined ? actor.p : besideCar(this.cars[actor.car]),
+        actor.weapon,
+        actor.deadAt,
+      );
       actor.deaths++;
       if (playerCaused) {
         this.combat.kills++;
@@ -193,7 +201,10 @@ class Game {
       (_target, bot, damage, kind) => {
         if (kind === "shove" && this.vehicle < 0) {
           const dest = shovePosition(me.p, bot.p);
-          if (q.movement(me.p, dest, p.height) && q.clear(dest, p.height)) {
+          if (
+            q.movement(me.p, dest, p.height, this.cars) &&
+            q.clear(dest, p.height)
+          ) {
             p.position.fromArray(dest);
             me.p = dest;
           }
@@ -461,8 +472,21 @@ class Game {
         started: action === "confirm" ? work?.started : undefined,
         index: i,
       });
-    } else if (action === "exit") car.driver = null;
-    else if (action === "confirm") {
+    } else if (action === "exit") {
+      const landing = exitCarPosition(
+        car,
+        (p) =>
+          this.countySpatial!.movement(car.p, p, this.player.height) &&
+          this.physics.clear(new T.Vector3(...p), this.player.height) &&
+          !this.cars.some((other) =>
+            insideVehicle(other, p, this.player.height),
+          ),
+      );
+      if (landing) {
+        car.driver = null;
+        this.player.position.fromArray(landing);
+      }
+    } else if (action === "confirm") {
       const result = advanceSeatAction(
         car,
         canReachCar(car, this.player.position.toArray()),
@@ -495,15 +519,6 @@ class Game {
         this.player.pitch = 0;
         this.previousCarPosition.copy(this.player.position);
         this.previousCarYaw = this.player.yaw;
-      } else if (this.vehicle >= 0 && this.combat.hp > 0) {
-        const p = this.player;
-        this.physics.move(
-          p.position,
-          new T.Vector3(Math.cos(p.yaw), 0, -Math.sin(p.yaw)).multiplyScalar(
-            2.2 * this.render.countyCars[this.vehicle].doorSide,
-          ),
-          1.76,
-        );
       }
       this.seatPending = false;
       this.vehicle = i;
@@ -726,10 +741,13 @@ class Game {
             city.boxes,
             () => this.rubbleClusters?.values() ?? [],
             () => this.cars,
+            () => (this.network.active ? this.network.players : []),
           )
         : undefined;
     this.seatPending = false;
     this.carSpeed = this.carSlip = this.carSteer = this.crashUntil = 0;
+    if (seed === COUNTY)
+      physics.walkingFleet = () => (this.vehicle < 0 ? this.cars : []);
     this.physics = physics;
     this.seed = seed;
     this.district = district;
@@ -852,6 +870,7 @@ class Game {
       this.mode === "contract" && seed !== COUNTY,
     );
     this.combat.online = this.mode === "online";
+    if (this.combat.online) this.combat.syncNpcDrops(this.network.npcDrops);
     this.combat.onSurfaceHit = (index, damage) =>
       this.structures?.damage(index, damage);
     if (this.citizens)
@@ -967,6 +986,7 @@ class Game {
       else if (actor.bot) {
         actor.bot.hp = Math.max(0, actor.bot.hp - amount);
         if (!actor.bot.hp) {
+          this.combat.dropBotWeapon(actor.bot);
           this.combat.kills++;
           this.combat.score += 100;
           actor.bot.model.fall(0);
@@ -1837,6 +1857,7 @@ class Game {
       if (this.seed === COUNTY && this.cars[m.index] && m.car) {
         this.cars[m.index] = m.car;
         this.syncSeat();
+        if (m.landing) this.player.position.fromArray(m.landing);
         if (m.ejected) {
           this.player.position.fromArray(m.ejected);
           this.notice("HIJACKED");
@@ -1847,6 +1868,18 @@ class Game {
       this.cars = m.cars;
       if (this.seatPending && performance.now() - this.seatRequestedAt > 2000)
         this.seatPending = false;
+    }
+    if (m.type === "snapshot" && this.seed === COUNTY && m.players) {
+      // Occupied vehicles have a driver pose on every snapshot. The full fleet
+      // arrives less often and would leave stale collision hulls in traffic.
+      for (const car of this.cars) {
+        if (!car.driver || car.driver === this.network.id) continue;
+        const driver = this.network.players.find((p) => p.id === car.driver);
+        if (driver) {
+          car.p = driver.p;
+          car.yaw = driver.yaw;
+        }
+      }
     }
     if (
       m.type === "resumed" &&
@@ -1936,6 +1969,8 @@ class Game {
       this.player.position.fromArray(m.p);
       this.player.velocity.set(0, 0, 0);
     }
+    if ((m.type === "npc-loot" || m.type === "resumed") && this.combat?.online)
+      this.combat.syncNpcDrops(this.network.npcDrops);
     if (m.type === "weapon-pickup") this.combat.collectWeapon(m.weapon);
     if (m.type === "ammo") {
       this.combat.mags = m.mags;
@@ -2289,14 +2324,9 @@ class Game {
     if (car) {
       const yaw = car.rotation.y;
       if (this.cockpit) {
-        cam.position.set(
-          car.seat.x - 0.045 * car.doorSide,
-          car.seat.y - 0.065,
-          car.seat.z + 0.058,
-        );
-        car.localToWorld(cam.position);
+        car.localToWorld(cam.position.copy(car.driverEye));
         cam.rotation.set(
-          T.MathUtils.clamp(p.pitch - 0.115, -1.05, 0.95),
+          T.MathUtils.clamp(p.pitch - 0.015, -1.05, 0.95),
           yaw + this.cockpitYaw,
           0,
           "YXZ",
@@ -2493,6 +2523,7 @@ class Game {
           !!state.npc && !!state.engaged,
         );
       if (state.npc && state.hp <= 0) {
+        model.aimRig.visible = false;
         model.fall(dt);
         if (
           dist > NPC_RADIUS ||
@@ -2936,6 +2967,7 @@ class Game {
       this.render.draw(
         this.time,
         this.network.active ? this.network.worldTime : Date.now() / 1000,
+        settings.reduced,
       );
     }
     this.frame++;

@@ -33,3 +33,41 @@ export function weaponPickups(city: City): WeaponPickup[] {
   }
   return sites;
 }
+
+export interface DroppedWeapon extends WeaponPickup {
+  id: number;
+  expiresAt: number;
+}
+
+export class NpcLoot {
+  drops: DroppedWeapon[] = [];
+  revision = 0;
+  private serial = 0;
+  spawn(p: V3, weapon: number, now: number) {
+    if (!Number.isInteger(weapon) || weapon < 0 || weapon >= FISTS) return;
+    this.revision++;
+    if (this.drops.length >= 32) this.drops.shift();
+    this.drops.push({
+      id: ++this.serial,
+      p: [...p],
+      weapon,
+      expiresAt: now + 60000,
+    });
+  }
+  expire(now: number) {
+    while (this.drops.length && this.drops[0].expiresAt <= now) {
+      this.drops.shift();
+      this.revision++;
+    }
+  }
+  collect(p: V3, owned: number[], now: number) {
+    this.expire(now);
+    const index = this.drops.findIndex(
+      (drop) =>
+        !owned.includes(drop.weapon) && distance(p, drop.p) <= PICKUP_RADIUS,
+    );
+    if (index < 0) return;
+    this.revision++;
+    return this.drops.splice(index, 1)[0];
+  }
+}

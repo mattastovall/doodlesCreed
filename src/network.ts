@@ -1,3 +1,4 @@
+import type { DroppedWeapon } from "./weapon-pickups.ts";
 import { RubbleRoster } from "./county-rubble-view.ts";
 import { RELEASE_ID } from "./release-info.ts";
 import { RUST_SCALE } from "./rust-boundary.ts";
@@ -26,6 +27,7 @@ export interface RemoteState {
 }
 export class Network {
   constructor(private storagePrefix = "dc") {}
+  npcDrops: DroppedWeapon[] = [];
   rubble = new RubbleRoster();
   structures = new Map<number, PieceState>();
   socket: WebSocket | null = null;
@@ -267,6 +269,7 @@ export class Network {
         if (m.type === "welcome" || m.type === "resumed") {
           done = true;
           clearTimeout(timer);
+          this.npcDrops = m.npcDrops ?? [];
           this.rubble.reset();
           for (const c of m.rubble ?? []) this.rubble.add(c);
           this.structures = new Map(m.structures ?? []);
@@ -311,6 +314,7 @@ export class Network {
           if (m.type === "rubble-spawn")
             for (const i of m.indices) this.structures.set(i, 2);
         }
+        if (m.type === "npc-loot") this.npcDrops = m.npcDrops;
         if (m.type === "structure") {
           if (m.state) this.structures.set(m.index, m.state);
           else this.structures.delete(m.index);

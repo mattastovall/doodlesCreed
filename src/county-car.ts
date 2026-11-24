@@ -1,7 +1,7 @@
 import * as T from "three";
 import { makeCockpitInstaller } from "./county-cockpit.ts";
 import { VEHICLE_DIMENSIONS } from "./county-vehicle-dimensions.ts";
-import { coastSun, skyUV } from "./county-atmosphere.ts";
+import { coastSun, panoramaSampling } from "./county-atmosphere.ts";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
@@ -120,11 +120,11 @@ export async function loadFleet(sky: T.Texture) {
     vertexShader: `uniform vec3 coat; varying vec3 tint,n,world;varying float enamel;
     void main(){enamel=color.a;tint=mix(pow(color.rgb,vec3(2.2)),coat,enamel);n=normalize(mat3(modelMatrix)*normal);world=(modelMatrix*vec4(position,1.)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
     fragmentShader: `varying vec3 tint,n,world;varying float enamel;uniform vec3 sun;uniform sampler2D panorama;
-    ${skyUV}
+    ${panoramaSampling}
     void main(){
       vec3 N=normalize(n), V=normalize(cameraPosition-world), R=reflect(-V,N);
       float lit=dot(N,sun), fresnel=pow(1.-max(0.,dot(N,V)),3.);
-      vec3 sky=texture2D(panorama,skyUV(R)).rgb;
+      vec3 sky=samplePanorama(panorama,R);
       vec3 body=tint*mix(vec3(.49,.58,.73),vec3(1.08,.97,.83),smoothstep(-.20,.38,lit));
       // Upholstery and hard trim retain their cool ink-and-paper palette.
       float up=.53*N.y+.47*lit;
@@ -143,9 +143,9 @@ export async function loadFleet(sky: T.Texture) {
     depthWrite: false,
     vertexShader: `varying vec3 n,world;void main(){world=(modelMatrix*vec4(position,1.)).xyz;n=mat3(modelMatrix)*normal;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
     fragmentShader: `uniform sampler2D panorama; varying vec3 n,world;
-    ${skyUV}
+    ${panoramaSampling}
     void main(){vec3 v=normalize(cameraPosition-world),N=normalize(n);float f=pow(1.-max(dot(v,N),0.),2.);
-      vec3 color=texture2D(panorama,skyUV(reflect(-v,N))).rgb;
+      vec3 color=samplePanorama(panorama,reflect(-v,N));
       gl_FragColor=vec4(mix(vec3(.06,.18,.22),color,.62+f*.32),.2+.55*f);
       #include <colorspace_fragment>
     }`,
@@ -219,6 +219,7 @@ export async function loadFleet(sky: T.Texture) {
   });
   return (kind: VehicleKind, finish: number, patrol = false) => {
     const car = new CountyCarModel(
+      kind,
       templates.get(kind)!,
       paints[patrol ? 0 : finish % paints.length],
       paints[0],
@@ -248,7 +249,17 @@ export async function loadFleet(sky: T.Texture) {
     return car;
   };
 }
+// Driver's eye relative to the authored seat marker (inward, up, forward).
+// Cab-over vans and the shallow saloon have different windshield rake.
+const driverOffset: Record<VehicleKind, [number, number, number]> = {
+  saloon: [0.045, -0.024, 0.19],
+  coupe: [0, 0.015, 0.1],
+  minivan: [0.045, 0.005, 0.18],
+  delivery: [0.015, 0.015, 0.11],
+  taxi: [0, 0.018, 0.105],
+};
 export class CountyCarModel extends T.Group {
+  readonly driverEye: T.Vector3;
   readonly beacons: T.MeshBasicMaterial[] = [];
   readonly seat: T.Vector3;
   readonly doorSide: number;
@@ -266,7 +277,12 @@ export class CountyCarModel extends T.Group {
   private steering: T.Object3D;
   private wheels: T.Object3D[];
   private needles: T.Object3D[];
-  constructor(template: T.Group, coat: T.Material, baseCoat: T.Material) {
+  constructor(
+    kind: VehicleKind,
+    template: T.Group,
+    coat: T.Material,
+    baseCoat: T.Material,
+  ) {
     super();
     const model = template.clone(true);
     model.traverse((o) => {
@@ -278,6 +294,10 @@ export class CountyCarModel extends T.Group {
     ];
     this.seat = new T.Vector3().fromArray(model.userData.seat);
     this.doorSide = model.userData.doorSide;
+    const [inward, up, forward] = driverOffset[kind];
+    this.driverEye = this.seat
+      .clone()
+      .add(new T.Vector3(-inward * this.doorSide, up, -forward));
     this.radius = model.userData.wheelRadius;
     const tiers = ["near", "street", "far"];
     this.levels = tiers.map((name) => model.getObjectByName(name)!);

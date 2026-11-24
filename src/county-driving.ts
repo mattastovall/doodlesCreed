@@ -1,3 +1,7 @@
+import {
+  vehicleEntersRunner,
+  type Pedestrian,
+} from "./county-pedestrian-collision.ts";
 import { Box3, Matrix4, Quaternion, Vector3 } from "three";
 import { OBB } from "three/examples/jsm/math/OBB.js";
 import { elevation, LIMIT } from "./county-plan.ts";
@@ -75,6 +79,7 @@ export class CountyDriveWorld {
     private boxes: Box[],
     private rubble: () => Iterable<RubbleCluster> = () => [],
     private cars: () => readonly CountyCar[] = () => [],
+    private runners?: () => Iterable<Pedestrian>,
   ) {
     for (const b of boxes) {
       if (
@@ -375,7 +380,16 @@ export class CountyDriveWorld {
       absC = Math.abs(c);
     const cx = from[0] + dx / 2,
       cz = from[2] + dz / 2;
-    if (own && this.trafficBlocks(own, from, to, state.yaw, yaw)) {
+    if (
+      (own && this.trafficBlocks(own, from, to, state.yaw, yaw)) ||
+      (this.runners &&
+        vehicleEntersRunner(
+          { p: from, yaw: state.yaw, kind },
+          { p: to, yaw, kind },
+          this.runners(),
+          own?.driver ?? null,
+        ))
+    ) {
       state.speed = 0;
       return false;
     }

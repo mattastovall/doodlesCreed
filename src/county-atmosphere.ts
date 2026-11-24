@@ -1,8 +1,33 @@
 import * as T from "three";
 import { assetUrl } from "./release-info.ts";
 
-export const coastSun = new T.Vector3(0.48, 0.52, -0.84).normalize();
-export const skyUV = `vec2 skyUV(vec3 d) { return vec2(atan(d.z,d.x)*0.15915494+0.5,asin(clamp(d.y,-1.,1.))*0.31830989+0.5); }`;
+// The sunset in coastal-sky.jpg sits at (0.311, 0.477) from the top left.
+const azimuth = (0.311 - 0.5) * 2 * Math.PI;
+const altitude = (0.5 - 0.477) * Math.PI;
+export const coastSun = new T.Vector3(
+  Math.cos(azimuth) * Math.cos(altitude),
+  Math.sin(altitude),
+  Math.sin(azimuth) * Math.cos(altitude),
+);
+
+export const panoramaSampling = `
+vec3 samplePanorama(sampler2D panorama, vec3 d) {
+  vec2 uv = vec2(atan(d.z,d.x) * 0.15915494 + 0.5,
+                 asin(clamp(d.y,-1.,1.)) * 0.31830989 + 0.5);
+  // Adjacent pixels across the meridian are one texel apart, even though
+  // their unwrapped coordinates differ by almost the full texture width.
+  vec2 dx = dFdx(uv), dy = dFdy(uv);
+  dx.x -= round(dx.x);
+  dy.x -= round(dy.x);
+  vec3 sky = textureGrad(panorama, uv, dx, dy).rgb;
+  float edge = min(uv.x, 1. - uv.x);
+  if (edge < .012) {
+    vec3 opposite = textureGrad(panorama, vec2(1.-uv.x,uv.y),
+                               vec2(-dx.x,dx.y),vec2(-dy.x,dy.y)).rgb;
+    sky = mix(sky, opposite, .5 * (1. - smoothstep(0., .012, edge)));
+  }
+  return sky;
+}`;
 
 export async function countyTextures() {
   const loader = new T.TextureLoader();
@@ -31,8 +56,8 @@ export function countySky(sky: T.Texture) {
     vertexShader: `varying vec3 direction;
     void main(){direction=position;vec4 projected=projectionMatrix*vec4(mat3(viewMatrix)*position,1.);gl_Position=projected.xyww;}`,
     fragmentShader: `varying vec3 direction;uniform sampler2D panorama;
-    ${skyUV}
-    void main(){gl_FragColor=texture2D(panorama,skyUV(normalize(direction)));
+    ${panoramaSampling}
+    void main(){gl_FragColor=vec4(samplePanorama(panorama,normalize(direction)),1.);
     #include <colorspace_fragment>
     }`,
   });

@@ -1,5 +1,8 @@
 import {
   MAGAZINES,
+  NpcLoot,
+  type DroppedWeapon,
+  type WeaponPickup,
   newInventory,
   PICKUP_RADIUS,
   weaponPickups,
@@ -109,7 +112,10 @@ export class Combat {
   weapon = FISTS;
   owned = [FISTS];
   mags = newInventory().mags;
+  npcLoot = new NpcLoot();
+  private seenLootRevision = 0;
   weaponDrops: {
+    id?: number;
     weapon: number;
     p: V3;
     mesh: T.Mesh<T.BufferGeometry, T.MeshBasicMaterial>;
@@ -160,29 +166,7 @@ export class Combat {
       this.adjacency[a].push(b);
       this.adjacency[b].push(a);
     }
-    for (const drop of weaponPickups(city)) {
-      const long = drop.weapon !== 2;
-      const barrel = new T.BoxGeometry(long ? 1.25 : 0.52, 0.13, 0.13);
-      const grip = new T.BoxGeometry(0.14, 0.3, 0.13)
-        .rotateZ(-0.2)
-        .translate(long ? -0.25 : -0.14, -0.15, 0);
-      const base = new T.CylinderGeometry(0.56, 0.62, 0.09, 12).translate(
-        0,
-        -0.52,
-        0,
-      );
-      const parts = [barrel, grip, base];
-      if (drop.weapon === 3)
-        parts.push(new T.BoxGeometry(0.38, 0.1, 0.1).translate(0, 0.13, 0));
-      const mesh = new T.Mesh(
-        mergeGeometries(parts),
-        new T.MeshBasicMaterial({ color: GOLD }),
-      );
-      parts.forEach((part) => part.dispose());
-      mesh.position.set(drop.p[0], drop.p[1] + 0.82, drop.p[2]);
-      scene.add(mesh);
-      this.weaponDrops.push({ ...drop, mesh });
-    }
+    for (const drop of weaponPickups(city)) this.addDropMesh(drop);
     if (spawnBots) {
       this.waveEnabled = true;
       for (let i = 0; i < 4; i++) this.spawnBot();
@@ -214,6 +198,50 @@ export class Combat {
       }
     }
   }
+  private addDropMesh(drop: WeaponPickup & { id?: number }) {
+    const long = drop.weapon !== 2;
+    const barrel = new T.BoxGeometry(long ? 1.25 : 0.52, 0.13, 0.13);
+    const grip = new T.BoxGeometry(0.14, 0.3, 0.13)
+      .rotateZ(-0.2)
+      .translate(long ? -0.25 : -0.14, -0.15, 0);
+    const base = new T.CylinderGeometry(0.56, 0.62, 0.09, 12).translate(
+      0,
+      -0.52,
+      0,
+    );
+    const parts = [barrel, grip, base];
+    if (drop.weapon === 3)
+      parts.push(new T.BoxGeometry(0.38, 0.1, 0.1).translate(0, 0.13, 0));
+    const mesh = new T.Mesh(
+      mergeGeometries(parts),
+      new T.MeshBasicMaterial({ color: GOLD }),
+    );
+    parts.forEach((part) => part.dispose());
+    mesh.position.set(drop.p[0], drop.p[1] + 0.82, drop.p[2]);
+    this.scene.add(mesh);
+    this.weaponDrops.push({ ...drop, mesh });
+  }
+  syncNpcDrops(drops: DroppedWeapon[]) {
+    for (let i = this.weaponDrops.length - 1; i >= 0; i--) {
+      const item = this.weaponDrops[i];
+      if (item.id === undefined || drops.some((drop) => drop.id === item.id))
+        continue;
+      item.mesh.removeFromParent();
+      item.mesh.geometry.dispose();
+      item.mesh.material.dispose();
+      this.weaponDrops.splice(i, 1);
+    }
+    for (const drop of drops)
+      if (!this.weaponDrops.some((item) => item.id === drop.id))
+        this.addDropMesh(drop);
+  }
+  dropBotWeapon(bot: Bot) {
+    this.npcLoot.spawn(
+      bot.p.toArray(),
+      bot.kind === "rusher" ? FISTS : bot.kind === "sniper" ? 3 : 0,
+      Date.now(),
+    );
+  }
   private spawnBot() {
     const id = this.botSerial++;
     const node = chooseNpcSpawn(
@@ -243,17 +271,19 @@ export class Combat {
     const model = new Doodle(RED);
     model.group.position.set(...p);
     this.scene.add(model.group);
+    const kind =
+      this.waves.number > 2 && id % 5 === 0
+        ? "sniper"
+        : id % 3 === 2
+          ? "rusher"
+          : "grunt";
+    if (kind === "rusher") model.setFistPose(true, 0, 1);
     this.bots.push({
       id,
       model,
       p: new T.Vector3(...p),
       hp: 100,
-      kind:
-        this.waves.number > 2 && id % 5 === 0
-          ? "sniper"
-          : id % 3 === 2
-            ? "rusher"
-            : "grunt",
+      kind,
       cooldown: 1.8,
       path: [],
       repath: 0,
@@ -427,6 +457,7 @@ export class Combat {
         else this.audio.hit();
         this.burst(point, RED, 5);
         if (target.hp <= 0) {
+          this.dropBotWeapon(target);
           this.kills++;
           this.score += headshot ? 180 : 100;
           this.killTime = 0.25;
@@ -566,6 +597,7 @@ export class Combat {
     }
     for (const bot of this.bots) {
       if (bot.hp <= 0) {
+        bot.model.aimRig.visible = false;
         bot.model.fall(dt);
         continue;
       }
@@ -788,12 +820,31 @@ export class Combat {
       }
     }
     const position = this.player.position.toArray() as V3;
+    if (!this.online) {
+      const now = Date.now();
+      this.npcLoot.expire(now);
+      if (onFoot && this.hp > 0) {
+        const collected = this.npcLoot.collect(position, this.owned, now);
+        if (collected) this.collectWeapon(collected.weapon);
+      }
+      if (this.seenLootRevision !== this.npcLoot.revision) {
+        this.syncNpcDrops(this.npcLoot.drops);
+        this.seenLootRevision = this.npcLoot.revision;
+      }
+    }
     for (const drop of this.weaponDrops) {
       const d = distance(position, drop.p);
-      drop.mesh.visible = !this.owned.includes(drop.weapon) && d < 100;
+      drop.mesh.visible =
+        (drop.id !== undefined || !this.owned.includes(drop.weapon)) && d < 100;
       if (!drop.mesh.visible) continue;
       drop.mesh.rotation.y = time;
-      if (!this.online && onFoot && this.hp > 0 && d <= PICKUP_RADIUS)
+      if (
+        drop.id === undefined &&
+        !this.online &&
+        onFoot &&
+        this.hp > 0 &&
+        d <= PICKUP_RADIUS
+      )
         this.collectWeapon(drop.weapon);
     }
     for (const item of this.pickups)

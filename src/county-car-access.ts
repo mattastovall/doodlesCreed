@@ -75,3 +75,20 @@ export function besideCar(car: CountyCar): V3 {
     car.p[2] - side * Math.sin(car.yaw),
   ];
 }
+
+export function exitCarPosition(
+  car: CountyCar,
+  clear: (p: V3) => boolean,
+): V3 | undefined {
+  const preferred = besideCar(car);
+  const dx = preferred[0] - car.p[0],
+    dz = preferred[2] - car.p[2];
+  const side: V3 = [car.p[0] - dx, car.p[1], car.p[2] - dz];
+  const rear: V3 = [
+    car.p[0] + 3.5 * Math.sin(car.yaw),
+    car.p[1],
+    car.p[2] + 3.5 * Math.cos(car.yaw),
+  ];
+  const front: V3 = [2 * car.p[0] - rear[0], car.p[1], 2 * car.p[2] - rear[2]];
+  return [preferred, side, rear, front].find(clear);
+}

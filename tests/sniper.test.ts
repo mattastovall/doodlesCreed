@@ -27,11 +27,13 @@ test("sniper selects, hits a distant NPC, enforces its cycle and reloads five ro
       {
         p: new Vector3(0, 0, -150),
         hp: 100,
+        kind: "grunt",
         model: { group: { visible: true } },
       } as any,
     ];
     assert.ok(c.fire());
     assert.equal(c.bots[0].hp <= 0, true);
+    assert.equal(c.npcLoot.drops[0].weapon, 0);
     assert.equal(c.mags[3], 4);
     assert.equal(c.fire(), false);
     assert.equal(c.mags[3], 4);
@@ -40,6 +42,11 @@ test("sniper selects, hits a distant NPC, enforces its cycle and reloads five ro
     assert.equal(c.reloadTime, 1.65);
     c.update(2.41, 0, new PerspectiveCamera());
     assert.equal(c.mags[3], 5);
+    p.reset([0, 0, -150]);
+    c.update(1 / 60, 3, new PerspectiveCamera());
+    assert.equal(c.weapon, 0);
+    assert.equal(c.npcLoot.drops.length, 0);
+    c.dispose();
   } finally {
     ph.dispose();
   }

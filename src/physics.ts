@@ -1,3 +1,5 @@
+import type { CountyCar } from "./county.ts";
+import { insideVehicle, vehicleSweep } from "./county-pedestrian-collision.ts";
 import { windowPassage } from "./window-vault.ts";
 import { PlayerRubble } from "./player-rubble.ts";
 import type { RubbleCluster } from "./county-wreckage.ts";
@@ -15,6 +17,7 @@ export class Physics {
   world: RAPIER.World;
   controller: RAPIER.KinematicCharacterController;
   collider: RAPIER.Collider;
+  walkingFleet?: () => readonly CountyCar[];
   private rubble: PlayerRubble;
   private hasMeshes = false;
   private triangleBoxes = new Map<string, Box>();
@@ -69,7 +72,16 @@ export class Physics {
     await initializeRapier();
     return new Physics(boxes);
   }
-  move(pos: Vector3, delta: Vector3, height: number) {
+  move(
+    pos: Vector3,
+    delta: Vector3,
+    height: number,
+    depth = 0,
+  ): {
+    grounded: boolean;
+    wall: Vector3 | null;
+    moved: { x: number; y: number; z: number };
+  } {
     if (this.rubble.prepareMovement(pos, delta, height))
       this.queriesDirty = true;
     this.refreshQueries();
@@ -85,16 +97,45 @@ export class Physics {
       (c) => c.handle !== this.collider.handle,
     );
     const m = this.controller.computedMovement();
-    pos.add(new Vector3(m.x, m.y, m.z));
+    const fleet = this.walkingFleet?.();
+    const contact =
+      fleet && vehicleSweep(fleet, pos.toArray(), [m.x, m.y, m.z], height);
+    let grounded = this.controller.computedGrounded();
     let wall: Vector3 | null = null;
     for (let i = 0; i < this.controller.numComputedCollisions(); i++) {
       const c = this.controller.computedCollision(i);
       if (c && Math.abs(c.normal1.y) < 0.4)
         wall = new Vector3(c.normal1.x, c.normal1.y, c.normal1.z);
     }
-    return { grounded: this.controller.computedGrounded(), wall, moved: m };
+    const travel = new Vector3(m.x, m.y, m.z);
+    if (!contact) {
+      pos.add(travel);
+      return { grounded, wall, moved: m };
+    }
+    const start = pos.clone();
+    const fraction = Math.max(
+      0,
+      contact.t - 0.0001 / Math.max(0.0001, travel.length()),
+    );
+    pos.addScaledVector(travel, fraction);
+    const normal = new Vector3(...contact.normal);
+    grounded ||= normal.y > 0.5;
+    if (normal.y === 0) wall = normal;
+    const slide = travel.multiplyScalar(1 - fraction).projectOnPlane(normal);
+    if (depth < 2 && slide.lengthSq() > 1e-10) {
+      const rest = this.move(pos, slide, height, depth + 1);
+      grounded ||= rest.grounded;
+      wall ??= rest.wall;
+    }
+    return { grounded, wall, moved: pos.clone().sub(start) };
   }
   clear(pos: Vector3, height = 1.76) {
+    if (
+      this.walkingFleet?.().some((car) =>
+        insideVehicle(car, pos.toArray(), height),
+      )
+    )
+      return false;
     this.refreshQueries();
     if (this.hasMeshes || this.structureColliders.size || this.rubble.size) {
       const center = new Vector3(pos.x, pos.y + height / 2 + 0.02, pos.z);

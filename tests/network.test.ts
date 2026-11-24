@@ -276,3 +276,63 @@ test("a player starts unarmed, acquires only nearby guns, and respawns with fist
     wss.close();
   }
 });
+
+test("an armed NPC leaves one shared gun which a late joiner can claim", async () => {
+  const wss = new WebSocketServer({ port: 0 });
+  await new Promise((r) => wss.once("listening", r));
+  const rooms = new Rooms(wss);
+  const port = (wss.address() as any).port;
+  const a = await client(port);
+  const b = await client(port);
+  try {
+    const created = next(a, "welcome");
+    a.send(JSON.stringify({ type: "create", name: "One", seed: "paper" }));
+    const welcome = await created;
+    const room = rooms.rooms.get(welcome.code)!;
+    const [player] = room.players.values();
+    const victim = {
+      ...player,
+      id: "target",
+      npc: true,
+      shieldUntil: 0,
+      hp: 1,
+    };
+    rooms.hurt(room, victim, player, 1);
+    assert.equal(room.npcLoot.drops.length, 0);
+    victim.hp = 1;
+    victim.weapon = 2;
+    const spawned = next(a, "npc-loot");
+    rooms.hurt(room, victim, player, 1);
+    rooms.hurt(room, victim, player, 1);
+    const { npcDrops } = await spawned;
+    assert.equal(npcDrops.length, 1);
+    assert.deepEqual(npcDrops[0].p, victim.p);
+    const joined = next(b, "welcome");
+    b.send(JSON.stringify({ type: "join", code: welcome.code, name: "Two" }));
+    assert.deepEqual((await joined).npcDrops, npcDrops);
+    const second = [...room.players.values()][1];
+    second.p = [...victim.p];
+    const pickup = next(b, "weapon-pickup");
+    const removed = next(a, "npc-loot");
+    const state = JSON.stringify({
+      type: "state",
+      p: victim.p,
+      yaw: 0,
+      pitch: 0,
+      weapon: 4,
+    });
+    b.send(state);
+    assert.equal((await pickup).weapon, 2);
+    assert.deepEqual((await removed).npcDrops, []);
+    a.send(state);
+    await next(a, "snapshot");
+    assert.deepEqual(player.owned, [4]);
+    assert.equal(second.weapon, 2);
+    assert.equal(second.mags[2], 14);
+  } finally {
+    a.close();
+    b.close();
+    rooms.dispose();
+    wss.close();
+  }
+});

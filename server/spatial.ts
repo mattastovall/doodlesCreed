@@ -1,3 +1,5 @@
+import type { CountyCar } from "../src/county.ts";
+import { vehicleSweep } from "../src/county-pedestrian-collision.ts";
 import type { CountyWreckage } from "../src/county-wreckage.ts";
 import { openedDoor } from "../src/county-structures.ts";
 import { meshOverlapsBox } from "../src/mesh-collision.ts";
@@ -61,10 +63,12 @@ export class Spatial {
       return b.mesh ? meshOverlapsBox(b.mesh, center, half) : true;
     });
   }
-  movement(a: V3, b: V3, height: number) {
+  movement(a: V3, b: V3, height: number, fleet?: readonly CountyCar[]) {
     // Check the swept torso at three lateral offsets. Low steps remain traversable.
     const delta = b.map((v, i) => v - a[i]) as V3,
       len = Math.hypot(...delta);
+    const vehicle = fleet && vehicleSweep(fleet, a, delta, height);
+    if (vehicle && (1 - vehicle.t) * len > 0.0001) return false;
     if (len < 0.001) return true;
     const dir = delta.map((v) => v / len) as V3,
       horizontal = Math.hypot(dir[0], dir[2]);

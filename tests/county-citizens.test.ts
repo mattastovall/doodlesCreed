@@ -1,3 +1,4 @@
+import { FISTS } from "../src/fists.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CountyCitizens, type CitizenAction } from "../src/county-citizens.ts";
@@ -86,6 +87,7 @@ test("reactions use the individual player's notoriety, sight line and opportunit
     );
     assert.deepEqual(actions, expected ? [expected] : []);
     assert.equal(shots.length, expected === "shot" ? 1 : 0);
+    assert.equal(a.weapon, expected === "shot" ? 2 : FISTS);
   }
   const cars = countyCars(),
     ai = new CountyCitizens(city, cars, {
@@ -231,8 +233,8 @@ test("nearby civilian and human drivers share a seated mesh that moves through t
         level.add(dial);
       }
   }
-  const a = new CountyCarModel(template, coat, coat),
-    b = new CountyCarModel(template, coat, coat);
+  const a = new CountyCarModel("saloon", template, coat, coat),
+    b = new CountyCarModel("saloon", template, coat, coat);
   const seated = a.getObjectByName("civilian-driver")!,
     other = b.getObjectByName("civilian-driver")!;
   assert.ok(seated instanceof Mesh && other instanceof Mesh);

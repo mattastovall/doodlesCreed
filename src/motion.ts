@@ -96,7 +96,13 @@ export class ViewMotion {
       : this.speedOffset +
         (target - this.speedOffset) *
           (1 - damp(target > this.speedOffset ? 5 : 7, dt));
+    // The cockpit uses a longer lens so the windscreen frames the road.
+    // Scale the projection, preserving the player's chosen base field of view.
+    const base =
+      mode === "cockpit"
+        ? (360 / Math.PI) * Math.atan(0.72 * Math.tan((hipFov * Math.PI) / 360))
+        : hipFov;
     this.fov =
-      hipFov + (adsFov - hipFov) * this.ads + this.speedOffset * (1 - this.ads);
+      base + (adsFov - base) * this.ads + this.speedOffset * (1 - this.ads);
   }
 }
