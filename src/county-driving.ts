@@ -34,11 +34,11 @@ const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 // Launch acceleration (m/s²), power per unit mass (W/kg), forward limit (m/s),
 // and maximum front-wheel lock (radians). The same tune runs during server replay.
 const handling: Record<VehicleKind, [number, number, number, number]> = {
-  saloon: [6.2, 108, 40, 0.59],
-  coupe: [7.6, 144, 40, 0.61],
-  minivan: [4.9, 81, 35, 0.59],
-  delivery: [4.2, 64, 30, 0.57],
-  taxi: [5.6, 95, 38, 0.6],
+  saloon: [7.8, 199, 54, 0.59],
+  coupe: [9.4, 278, 61, 0.61],
+  minivan: [6.1, 142, 47, 0.59],
+  delivery: [5.2, 107, 41, 0.57],
+  taxi: [7.2, 175, 51, 0.6],
 };
 const massKg: Record<VehicleKind, number> = {
   saloon: 1500,
@@ -201,7 +201,7 @@ export class CountyDriveWorld {
     return false;
   }
 
-  // Each fixed step covers at most 34 cm. Expand the oriented hull by its
+  // Each fixed step covers at most 51 cm. Expand the oriented hull by its
   // translation and angular sweep about the midpoint, then SAT-test all four axes.
   advance(
     state: DrivePose,

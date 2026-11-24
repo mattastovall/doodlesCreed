@@ -113,12 +113,28 @@ export async function loadFleet(sky: T.Texture) {
   const paint = new T.ShaderMaterial({
     vertexColors: true,
     uniforms: {
+      wheelPose: { value: new T.Vector4(1, 0, 1, 0) },
       coat: { value: new T.Color(0xf5f4ec) },
       panorama: { value: sky },
       sun: { value: coastSun },
     },
-    vertexShader: `uniform vec3 coat; varying vec3 tint,n,world;varying float enamel;
-    void main(){enamel=color.a;tint=mix(pow(color.rgb,vec3(2.2)),coat,enamel);n=normalize(mat3(modelMatrix)*normal);world=(modelMatrix*vec4(position,1.)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+    vertexShader: `uniform vec3 coat; uniform vec4 wheelPose;
+    attribute vec4 _wheelhub;
+    varying vec3 tint,n,world;varying float enamel;
+    // Street and far LODs keep their wheels in the shared body draw. The
+    // authored hub and axle tag let only tire/rim vertices move.
+    vec3 axlePose(vec3 v){
+      v.yz = mat2(wheelPose.x,wheelPose.y,-wheelPose.y,wheelPose.x)*v.yz;
+      if(_wheelhub.w>0.) v.xz = mat2(wheelPose.z,-wheelPose.w,wheelPose.w,wheelPose.z)*v.xz;
+      return v;
+    }
+    void main(){
+      vec3 p=position, localNormal=normal;
+      if(_wheelhub.w!=0.){p=_wheelhub.xyz+axlePose(p-_wheelhub.xyz);localNormal=axlePose(normal);}
+      enamel=color.a;tint=mix(pow(color.rgb,vec3(2.2)),coat,enamel);
+      n=normalize(mat3(modelMatrix)*localNormal);world=(modelMatrix*vec4(p,1.)).xyz;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
+    }`,
     fragmentShader: `varying vec3 tint,n,world;varying float enamel;uniform vec3 sun;uniform sampler2D panorama;
     ${panoramaSampling}
     void main(){
@@ -154,6 +170,7 @@ export async function loadFleet(sky: T.Texture) {
     0xf5f4ec, 0xead28b, 0x748fab, 0xdbe8ee, 0x7ca8ac, 0xc98172,
   ].map((hex) => {
     const material = paint.clone();
+    Object.assign(material.defaultAttributeValues, { _wheelhub: [0, 0, 0, 0] });
     material.uniforms.panorama.value = sky;
     material.uniforms.coat.value.setHex(hex);
     return material;
@@ -272,6 +289,9 @@ export class CountyCarModel extends T.Group {
   private elapsed = 1;
   private lastTime = 0;
   private lastPosition = new T.Vector3();
+  private lastYaw = 0;
+  private wheelbase: number;
+  private wheelPose = new T.Vector4(1, 0, 1, 0);
   private roll = 0;
   private turn = 0;
   private steering: T.Object3D;
@@ -299,6 +319,20 @@ export class CountyCarModel extends T.Group {
       .clone()
       .add(new T.Vector3(-inward * this.doorSide, up, -forward));
     this.radius = model.userData.wheelRadius;
+    this.wheelbase = VEHICLE_DIMENSIONS[kind][3];
+    model.traverse((o) => {
+      if (o instanceof T.Mesh && o.geometry.hasAttribute("_wheelhub")) {
+        o.onBeforeRender = (_r, _s, _c, _g, material) => {
+          if (
+            material instanceof T.ShaderMaterial &&
+            material.uniforms.wheelPose
+          ) {
+            material.uniforms.wheelPose.value.copy(this.wheelPose);
+            material.uniformsNeedUpdate = true;
+          }
+        };
+      }
+    });
     const tiers = ["near", "street", "far"];
     this.levels = tiers.map((name) => model.getObjectByName(name)!);
     this.motorist = driverFigure.clone();
@@ -316,7 +350,7 @@ export class CountyCarModel extends T.Group {
     driver: string | null,
     now: number,
     distance: number,
-    steer = 0,
+    steer?: number,
     responding = false,
     reduced = false,
     hijack?: number,
@@ -336,28 +370,50 @@ export class CountyCarModel extends T.Group {
     if (this.previous !== undefined && driver !== this.previous)
       this.elapsed = this.wasHijacking ? 0.55 : 0;
     this.wasHijacking = hijack !== undefined;
-    let speed = 0;
+    let speed = 0,
+      inferredSteer = 0;
     if (driver && this.previous === driver) {
       const dx = this.position.x - this.lastPosition.x,
         dz = this.position.z - this.lastPosition.z;
-      speed = dt > 0 ? Math.hypot(dx, dz) / dt : 0;
-      this.roll +=
-        (dx * Math.sin(this.rotation.y) + dz * Math.cos(this.rotation.y)) /
-        this.radius;
+      const travel = Math.hypot(dx, dz);
+      const yawDelta = Math.atan2(
+        Math.sin(this.rotation.y - this.lastYaw),
+        Math.cos(this.rotation.y - this.lastYaw),
+      );
+      const midYaw = this.lastYaw + yawDelta / 2;
+      // The vehicle faces local -Z. Forward motion rolls a wheel about -X.
+      const forward = -dx * Math.sin(midYaw) - dz * Math.cos(midYaw);
+      if (dt > 0 && travel <= 20) {
+        speed = travel / dt;
+        this.roll = (this.roll - forward / this.radius) % (Math.PI * 2);
+        if (Math.abs(forward) > 0.004)
+          inferredSteer = T.MathUtils.clamp(
+            Math.atan((this.wheelbase * yawDelta) / forward),
+            -0.65,
+            0.65,
+          );
+      }
     }
+    this.lastYaw = this.rotation.y;
     this.needles.forEach(
       (n, i) =>
         (n.rotation.z = 2.18 - Math.min(1, speed / (i ? 43 : 44.704)) * 4.36),
     );
     this.lastPosition.copy(this.position);
     this.lastTime = now;
-    this.turn += (steer - this.turn) * (1 - Math.exp(-12 * dt));
-    if (this.steering) this.steering.rotation.z = -this.turn * 1.9;
+    const desiredTurn = steer === undefined ? inferredSteer : -steer * 0.45;
+    this.turn += (desiredTurn - this.turn) * (1 - Math.exp(-12 * dt));
+    if (this.steering) this.steering.rotation.z = this.turn * (1.9 / 0.45);
+    this.wheelPose.set(
+      Math.cos(this.roll),
+      Math.sin(this.roll),
+      Math.cos(this.turn),
+      Math.sin(this.turn),
+    );
     this.wheels.forEach((wheel, i) => {
-      if (wheel) {
-        wheel.rotation.x = this.roll;
-        wheel.rotation.y = i < 2 ? -this.turn * 0.45 : 0;
-      }
+      // Steering acts about the upright kingpin; rolling acts about the
+      // steered wheel's own lateral axle, independent of the tread phase.
+      if (wheel) wheel.rotation.set(this.roll, i < 2 ? this.turn : 0, 0, "YXZ");
     });
     this.previous = driver;
     const t = Math.min(1, this.elapsed / 0.98);

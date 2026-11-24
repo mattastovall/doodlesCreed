@@ -1,3 +1,5 @@
+import { CountyDriveCamera } from "./county-drive-camera.ts";
+import { CountyDriveLens } from "./county-drive-lens.ts";
 import { sampleCountyWater } from "./county-hydrology.ts";
 import { insideVehicle } from "./county-pedestrian-collision.ts";
 import {
@@ -317,7 +319,10 @@ class Game {
   }
   cockpit = settings.cockpit === true;
   private cockpitYaw = 0;
-  private chaseSlip = 0;
+  private drivingCamera = new CountyDriveCamera();
+  private boomOrigin = new T.Vector3();
+  private boomRay = new T.Vector3();
+  private driveLens?: CountyDriveLens;
   private doorUntil = 0;
   private get seatActor() {
     return this.mode === "online" ? this.network.id : "local";
@@ -509,7 +514,8 @@ class Game {
       this.doorUntil = performance.now() + 650;
       this.carSpeed = this.carSlip = this.carSteer = 0;
       this.carSkidding = false;
-      this.chaseSlip = 0;
+      this.drivingCamera.reset();
+      this.driveLens?.clear();
       this.drivePending = [];
       this.sentDriveSequence = this.driveSequence;
       if (i >= 0) {
@@ -584,7 +590,7 @@ class Game {
         c.driver,
         performance.now() / 1000,
         distance,
-        k === i ? -this.carSteer / 0.45 : 0,
+        k === i ? -this.carSteer / 0.45 : undefined,
         c.responding,
         settings.reduced,
         c.interaction?.action === "hijack"
@@ -735,6 +741,9 @@ class Game {
       (line.material as T.Material).dispose();
     }
     this.remoteRopes.clear();
+    this.driveLens?.dispose();
+    this.driveLens =
+      seed === COUNTY ? new CountyDriveLens(city.plan) : undefined;
     this.city = city;
     this.countyOverview = false;
     $("city-map-panel").classList.remove("overview");
@@ -2346,35 +2355,43 @@ class Game {
     const car = this.render.countyCars[this.vehicle];
     if (car) {
       const yaw = car.rotation.y;
+      const rig = this.drivingCamera;
+      rig.update(dt, yaw, this.carSpeed, this.carSlip, settings.reduced);
       if (this.cockpit) {
         car.localToWorld(cam.position.copy(car.driverEye));
         cam.rotation.set(
           T.MathUtils.clamp(p.pitch - 0.015, -1.05, 0.95),
           yaw + this.cockpitYaw,
-          0,
+          rig.bank * 0.21,
           "YXZ",
         );
+        cam.position.y += rig.vibration * 0.3;
       } else {
-        // Follow part of the travel direction so the driver sees the chassis
-        // rotate across the road. Damping keeps the catch from whipping the view.
-        const targetSlip =
-          motion * T.MathUtils.clamp(this.carSlip * 0.78, -0.58, 0.58);
-        this.chaseSlip = T.MathUtils.damp(this.chaseSlip, targetSlip, 10, dt);
-        const heading = yaw - this.chaseSlip;
-        const sin = Math.sin(heading),
-          cos = Math.cos(heading);
+        const sin = Math.sin(rig.heading),
+          cos = Math.cos(rig.heading);
         const lead =
-          motion * T.MathUtils.smoothstep(this.carSpeed, 5, 32) * 1.8;
-        cam.position.set(
-          car.position.x + 6 * sin,
-          car.position.y + 3.1,
-          car.position.z + 6 * cos,
+          motion * T.MathUtils.smoothstep(this.carSpeed, 3, 48) * 2.8;
+        this.boomOrigin.copy(car.position).y += 1.15;
+        this.boomRay.set(rig.boom * sin, 1.95 + rig.vibration, rig.boom * cos);
+        const distance = this.boomRay.length();
+        this.boomRay.divideScalar(distance);
+        const wall = this.physics.ray(
+          this.boomOrigin,
+          this.boomRay,
+          distance + 0.18,
         );
+        cam.position
+          .copy(this.boomOrigin)
+          .addScaledVector(
+            this.boomRay,
+            wall ? Math.max(0.1, wall.distance - 0.18) : distance,
+          );
         cam.lookAt(
           car.position.x - lead * sin,
           car.position.y + 1,
           car.position.z - lead * cos,
         );
+        cam.rotateZ(rig.bank + 0.11 * rig.vibration);
       }
       const entry = T.MathUtils.smoothstep(
         (performance.now() - this.entryTime) / 450,
@@ -2386,7 +2403,8 @@ class Game {
         cam.quaternion.slerp(this.entryRotation, 1 - entry);
       }
     }
-    cam.fov = v.fov;
+    cam.fov =
+      v.fov + (car ? this.drivingCamera.zoom * (this.cockpit ? 0.45 : 1) : 0);
     cam.updateProjectionMatrix();
     const scoped =
       this.combat.weapon === 3 ? T.MathUtils.smoothstep(v.ads, 0.65, 0.98) : 0;
@@ -2997,6 +3015,17 @@ class Game {
         this.render.cityGroup.userData.updateDoors?.(dt);
         this.debris?.update(dt);
         this.tires?.update(dt);
+      }
+      if (this.driveLens) {
+        if (this.state === "play" && this.vehicle >= 0)
+          this.driveLens.update(
+            dt,
+            this.player.position.x,
+            this.player.position.z,
+            this.carSpeed,
+            settings.reduced,
+          );
+        else this.driveLens.clear();
       }
       this.updateVisuals(dt);
       this.combat.renderShots(dt);

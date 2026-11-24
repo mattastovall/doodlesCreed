@@ -78,10 +78,10 @@ test("speed lens ramps by movement mode and respects reduced motion and aiming",
   };
   assert.ok(Math.abs(settle(13.2, "run") - 88) < 0.01);
   assert.ok(Math.abs(settle(34, "swing") - 96) < 0.01);
-  assert.ok(Math.abs(settle(38, "chase") - 98) < 0.01);
+  assert.ok(Math.abs(settle(54, "chase") - 105) < 0.01);
   const parkedFov = settle(0, "cockpit");
   assert.ok(parkedFov > 63 && parkedFov < 65);
-  assert.ok(Math.abs(settle(38, "cockpit") - parkedFov - 10) < 0.01);
+  assert.ok(Math.abs(settle(54, "cockpit") - parkedFov - 17) < 0.01);
   assert.equal(settle(38, "chase", true), 82);
   assert.ok(Math.abs(settle(13, "run", false, true) - 57) < 0.01);
 });

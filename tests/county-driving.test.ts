@@ -145,7 +145,7 @@ test("fleet launch, coasting, service brake and reverse use distinct responses",
     return pose.speed;
   };
   const launch = run("coupe", 0, w, 120);
-  assert.ok(launch > 7 && launch < 7.6);
+  assert.ok(launch > 9 && launch < 9.4);
   assert.ok(run("delivery", 0, w, 120) < launch);
   assert.ok(run("coupe", 25, w, 120) - 25 < launch);
   assert.ok(run("coupe", 20, neutral, 120) > 18);

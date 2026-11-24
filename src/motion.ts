@@ -9,8 +9,8 @@ const speedLens = {
   wall: [17, 8],
   air: [23, 9],
   swing: [34, 14],
-  cockpit: [38, 10],
-  chase: [38, 16],
+  cockpit: [54, 17],
+  chase: [54, 23],
 } as const;
 export type LensMode = keyof typeof speedLens;
 export class ViewMotion {
