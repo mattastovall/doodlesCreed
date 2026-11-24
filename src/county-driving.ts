@@ -18,6 +18,22 @@ export function driveInput(throttle: number, side: number, brake: boolean) {
   return throttle + 1 + 3 * (side + 1) + (brake ? 9 : 0);
 }
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+// Launch acceleration (m/s²), power per unit mass (W/kg), forward limit (m/s),
+// and maximum front-wheel lock (radians). The same tune runs during server replay.
+const handling: Record<VehicleKind, [number, number, number, number]> = {
+  saloon: [5.7, 91, 40, 0.59],
+  coupe: [7.0, 118, 40, 0.61],
+  minivan: [4.5, 72, 35, 0.59],
+  delivery: [3.9, 58, 30, 0.57],
+  taxi: [5.1, 82, 38, 0.6],
+};
+const massKg: Record<VehicleKind, number> = {
+  saloon: 1500,
+  coupe: 1350,
+  delivery: 1050,
+  minivan: 1900,
+  taxi: 1550,
+};
 const CELL = 8;
 const key = (x: number, z: number) => x * 4096 + z;
 // Match the County's 20 m triangles, including the diagonal through each square.
@@ -191,20 +207,43 @@ export class CountyDriveWorld {
     const throttle = (input % 3) - 1,
       side = (Math.floor(input / 3) % 3) - 1,
       brake = input >= 9;
-    const drag = brake ? 6 : throttle ? 0.12 : 0.72;
-    let speed = clamp(
-      (state.speed + throttle * (state.speed * throttle < 0 ? 29 : 17) * dt) *
-        Math.exp(-drag * dt),
-      -12,
-      40,
+    const [launch, power, limit, lock] = handling[kind];
+    const previous = state.speed;
+    const magnitude = Math.abs(previous);
+    const resistance = 0.18 + 0.00105 * magnitude * magnitude;
+    const slowing = throttle * previous < 0;
+    let speed: number;
+    if (brake || slowing || !throttle) {
+      // Opposite throttle brakes to a complete stop before engaging reverse.
+      // Space holds the car at zero even with the accelerator down.
+      const deceleration = resistance + (brake ? 9.8 : slowing ? 8.2 : 0.35);
+      speed = Math.sign(previous) * Math.max(0, magnitude - deceleration * dt);
+    } else {
+      const top = throttle > 0 ? limit : 7;
+      const thrust =
+        throttle > 0 ? Math.min(launch, power / Math.max(1, magnitude)) : 3.1;
+      const taper = clamp((top - magnitude) / 4, 0, 1);
+      speed =
+        throttle * Math.max(0, magnitude + (thrust * taper - resistance) * dt);
+    }
+    // Full parking lock at low speed. Limit lateral acceleration as speed rises,
+    // including while the wheel returns from a previously tight turn.
+    const grip = 8.6;
+    const maxSteer = Math.atan(
+      1 / Math.hypot(1 / Math.tan(lock), (speed * speed) / (wheelbase * grip)),
     );
-    if (Math.abs(speed) < 0.025 && !throttle) speed = 0;
-    // Steering lock narrows at speed; yaw curvature follows the bicycle model.
-    const maxSteer = 0.6 / (1 + 0.0027 * speed * speed);
-    state.steer += (-side * maxSteer - state.steer) * (1 - Math.exp(-8 * dt));
+    const target = -side * maxSteer;
+    const rate =
+      (!side || state.steer * target < 0 ? 2.9 : 1.75) /
+      (1 + 0.035 * magnitude);
+    state.steer = clamp(
+      state.steer + clamp(target - state.steer, -rate * dt, rate * dt),
+      -maxSteer,
+      maxSteer,
+    );
     state.speed = speed;
     if (!speed) return false;
-    const distance = speed * dt,
+    const distance = (previous + speed) * 0.5 * dt,
       turn = (distance * Math.tan(state.steer)) / wheelbase;
     const mid = state.yaw + turn / 2,
       s = Math.sin(mid),
@@ -335,17 +374,18 @@ export class CountyDriveWorld {
         continue;
       contacts.push(b);
     }
-    const energy = speed * speed;
+    const energyPerSpeedSquared = massKg[kind] / 2000; // kinetic energy in kJ
+    const energy = energyPerSpeedSquared * speed * speed;
     // Brittle glazing, doors and fittings yield first. A wall consumes more
     // kinetic energy; damage the actual supporting member to invoke structural failure.
     const cost = (b: Box) =>
       b.kind === "window"
-        ? 10
+        ? 3
         : b.piece === "fixture"
-          ? 18
+          ? 5
           : b.piece === "door" || b.piece === "furniture"
-            ? 38
-            : 145;
+            ? 11
+            : 42;
     contacts.sort((a, b) => cost(a) - cost(b));
     let remaining = energy,
       impact = false;
@@ -370,7 +410,8 @@ export class CountyDriveWorld {
     }
     state.p = to;
     state.yaw += turn;
-    state.speed = Math.sign(speed) * Math.sqrt(remaining);
+    state.speed =
+      Math.sign(speed) * Math.sqrt(remaining / energyPerSpeedSquared);
     return impact;
   }
 }

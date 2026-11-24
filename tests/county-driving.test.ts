@@ -126,7 +126,30 @@ test("parked and in-motion civilian chassis stop the driver at the bumper and pe
   assert.ok(pose.p[2] > -3.9 && pose.p[2] < -3.2);
   other.driver = "";
   other.p = [...pose.p]; // Traffic can be moved between authoritative samples.
-  for (let i = 0; i < 100; i++)
+  for (let i = 0; i < 240; i++)
     city.advance(pose, "saloon", driveInput(-1, 0, false), undefined, own);
   assert.ok(pose.p[2] > 0 && pose.speed < 0);
+});
+
+test("fleet launch, coasting, service brake and reverse use distinct responses", () => {
+  const world = new CountyDriveWorld([]);
+  const run = (
+    kind: "coupe" | "delivery",
+    speed: number,
+    input: number,
+    steps: number,
+  ) => {
+    const pose = car(speed);
+    for (let i = 0; i < steps; i++) world.advance(pose, kind, input);
+    return pose.speed;
+  };
+  const launch = run("coupe", 0, w, 120);
+  assert.ok(launch > 6 && launch < 7);
+  assert.ok(run("delivery", 0, w, 120) < launch);
+  assert.ok(run("coupe", 25, w, 120) - 25 < launch);
+  assert.ok(run("coupe", 20, neutral, 120) > 18);
+  assert.equal(run("coupe", 20, driveInput(1, 0, true), 300), 0);
+  const reverse = driveInput(-1, 0, false);
+  assert.ok(run("coupe", 10, reverse, 60) > 0);
+  assert.ok(run("coupe", 0, reverse, 240) < -4);
 });

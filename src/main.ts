@@ -2504,6 +2504,15 @@ class Game {
     $("health-fill").style.width = c.hp + "%";
     $("health-fill").style.backgroundColor =
       c.hp < 30 ? "#d23c4530" : "transparent";
+    const driving = this.vehicle >= 0;
+    $("hud").classList.toggle("driving", driving);
+    if (driving) {
+      $("drive-speed").textContent = String(
+        Math.round(Math.abs(this.carSpeed) * 2.23694),
+      );
+      $("drive-gear").textContent =
+        this.carSpeed < -0.01 ? "R" : this.carSpeed > 0.01 ? "D" : "N";
+    }
     $("speed").textContent = String(Math.round(p.speed));
     const nearby =
       this.seed === COUNTY && this.vehicle < 0 ? this.nearestCar() : -1;
@@ -2513,7 +2522,7 @@ class Game {
         ? "ENTERING…"
         : "EXITING…"
       : this.vehicle >= 0
-        ? "DRIVING · E EXIT · V CAMERA"
+        ? "SPACE BRAKE · E EXIT · V CAMERA"
         : door !== undefined
           ? this.structures?.states.get(door) === 1
             ? "E · CLOSE DOOR"

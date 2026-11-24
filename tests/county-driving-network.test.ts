@@ -73,7 +73,7 @@ test("County drivers advance only from timed, owned input; a real crash is broad
     let seq = 13;
     for (
       let i = 0;
-      i < 80 &&
+      i < 200 &&
       !messages.some(
         (m) =>
           m.type === "structure" && r.city.boxes[m.index].kind === "window",
