@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countyWaterBounds,
+  sampleCountySediment,
   sampleCountyWater,
 } from "../src/county-hydrology.ts";
 import { alongStreet, planCounty, terrainHeight } from "../src/county-plan.ts";
@@ -90,4 +91,54 @@ test("all street edges, parcels and roadside landmarks remain outside water and 
     for (const sx of [-0.5, 0, 0.5])
       for (const sz of [-0.5, 0, 0.5])
         assert.equal(sampleCountyWater(x + w * sx, z + d * sz), undefined);
+});
+
+test("alternating bends reverse point-bar deposition and scour on the actual terrain", () => {
+  // Both cross sections run west to east. The stream first swings east and
+  // then back west, putting the sandy bar on opposite sides of the valley.
+  for (const [bar, cut] of [
+    [
+      [277, 441],
+      [257, 441],
+    ],
+    [
+      [305, 508],
+      [325, 508],
+    ],
+  ]) {
+    const sediment = (p: number[]) => sampleCountySediment(p[0], p[1])!;
+    assert.ok(sediment(bar).sand > sediment(cut).sand + 0.3);
+    assert.ok(sediment(cut).gravel > sediment(bar).gravel + 0.3);
+    assert.ok(depth(cut[0], cut[1]) > depth(bar[0], bar[1]) + 0.4);
+  }
+});
+
+test("the inlet's paired sand lobes flank a continuous, deeper distributary", () => {
+  const channel = depth(230, 605);
+  for (const [x, z] of [
+    [224, 600],
+    [247, 611],
+  ]) {
+    assert.ok(sampleCountySediment(x, z)!.sand > 0.8);
+    assert.ok(depth(x, z) > 0 && channel > depth(x, z) + 1.5);
+  }
+  assert.ok(depth(200, 635) > channel + 3);
+  assert.ok(sampleCountySediment(-170, 690)!.silt > 0.8);
+  assert.ok(sampleCountySediment(-335, -590)!.gravel > 0.7);
+  assert.ok(depth(-335, -590) > 2 * depth(-170, 690));
+});
+
+test("all sediment mixtures leave a bounded contribution and fade beyond their floodplain", () => {
+  for (const b of countyWaterBounds) {
+    for (let x: number = b.minX; x < b.maxX; x += 7)
+      for (let z: number = b.minZ; z < b.maxZ; z += 7) {
+        const weights = sampleCountySediment(x, z);
+        if (!weights) continue;
+        assert.ok(
+          weights.sand >= 0 && weights.silt >= 0 && weights.gravel >= 0,
+        );
+        assert.ok(weights.sand + weights.silt + weights.gravel <= 1 + 1e-9);
+      }
+  }
+  assert.equal(sampleCountySediment(320, 0), undefined);
 });

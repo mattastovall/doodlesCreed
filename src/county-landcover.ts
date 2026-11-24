@@ -1,5 +1,9 @@
 import type { CityPlan } from "./city-plan.ts";
-import { sampleCountyWater, countyWaterBounds } from "./county-hydrology.ts";
+import {
+  sampleCountyWater,
+  sampleCountySediment,
+  countyWaterBounds,
+} from "./county-hydrology.ts";
 import { LIMIT, terrainHeight } from "./county-plan.ts";
 import { randomSeed, type Box } from "./world.ts";
 
@@ -347,6 +351,8 @@ export function regionalUnderbrush(plan: CityPlan, limit: number) {
           y > water.surfaceY + 2.4
         )
           continue;
+        // Fast, scoured gravel banks stay mostly open; reed colonies occupy quiet margins.
+        if ((sampleCountySediment(x, z)?.gravel ?? 0) > 0.55) continue;
         const size = 0.84 + random() * 0.78;
         if (space.accept(x, z, size * 0.64))
           plants.push({ x, y, z, kind: "reed", size });

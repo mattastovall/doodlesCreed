@@ -1,6 +1,10 @@
 import * as T from "three";
 import { coastSun, panoramaSampling } from "./county-atmosphere.ts";
-import { countyWaterBounds, sampleCountyWater } from "./county-hydrology.ts";
+import {
+  countyWaterBounds,
+  sampleCountySediment,
+  sampleCountyWater,
+} from "./county-hydrology.ts";
 
 interface SurfaceVertex {
   x: number;
@@ -8,6 +12,8 @@ interface SurfaceVertex {
   z: number;
   depth: number;
   current: number;
+  sand: number;
+  silt: number;
 }
 
 function shorePoint(a: SurfaceVertex, b: SurfaceVertex): SurfaceVertex {
@@ -17,13 +23,14 @@ function shorePoint(a: SurfaceVertex, b: SurfaceVertex): SurfaceVertex {
     y: a.y + t * (b.y - a.y),
     z: a.z + t * (b.z - a.z),
     current: a.current + t * (b.current - a.current),
+    sand: a.sand + t * (b.sand - a.sand),
+    silt: a.silt + t * (b.silt - a.silt),
     depth: 0,
   };
 }
 
 function waterMaterial(sky: T.Texture, time: { value: number }) {
   const material = new T.MeshBasicMaterial({
-    transparent: true,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
@@ -33,14 +40,14 @@ function waterMaterial(sky: T.Texture, time: { value: number }) {
     shader.uniforms.waterSky = { value: sky };
     shader.uniforms.sunDirection = { value: coastSun };
     shader.vertexShader =
-      `attribute vec2 waterData;
-      varying vec3 surfacePosition; varying vec2 surfaceData;\n` +
+      `attribute vec4 waterData;
+      varying vec3 surfacePosition; varying vec4 surfaceData;\n` +
       shader.vertexShader.replace(
         "#include <begin_vertex>",
         "#include <begin_vertex>\nsurfacePosition = (modelMatrix * vec4(position, 1.)).xyz; surfaceData = waterData;",
       );
     shader.fragmentShader =
-      `varying vec3 surfacePosition; varying vec2 surfaceData;
+      `varying vec3 surfacePosition; varying vec4 surfaceData;
       uniform float waterTime; uniform sampler2D waterSky; uniform vec3 sunDirection;
       ${panoramaSampling}\n` +
       shader.fragmentShader.replace(
@@ -49,29 +56,27 @@ function waterMaterial(sky: T.Texture, time: { value: number }) {
       vec2 p = surfacePosition.xz;
       float depth = max(surfaceData.x, 0.);
       float t = waterTime;
-      float wind = dot(p,vec2(.32,.76)) + 1.37*sin(dot(p,vec2(.08,-.095)));
-      float swell = sin(wind - t*.85);
-      float crossWave = sin(dot(p,vec2(-.55,.18)) + t*.53 + .45*swell);
-      float capillaryPhase = dot(p,vec2(.75,2.3)) + swell*1.6 - t*1.14 + surfaceData.y*.65*sin(wind-t*1.4);
-      float fine = 1.-smoothstep(.32,1.8,fwidth(capillaryPhase));
-      float capillary = sin(capillaryPhase)*fine;
-      vec3 n = normalize(vec3(.022*crossWave+.009*capillary, 1., .03*swell+.017*capillary));
+      // Interfering wave trains perturb the reflection. Fade unresolved waves
+      // with screen footprint so ripples stay stable from a moving car.
+      float drift = t * (.36 + surfaceData.y * .24);
+      vec2 bend = vec2(sin(dot(p, vec2(.046,.023))), cos(dot(p, vec2(-.017,.054))));
+      vec2 q = p + 2.1 * bend;
+      vec3 phase = vec3(dot(q, vec2(.44,.76)) - drift,
+                        dot(q, vec2(-.91,.31)) + drift*.73,
+                        dot(q, vec2(1.37,-1.72)) - drift*1.6);
+      vec3 waves = sin(phase) * (1. - smoothstep(vec3(.35), vec3(2.6), fwidth(phase)));
+      vec3 n = normalize(vec3(dot(waves,vec3(.015,-.010,.006)), 1.,
+                              dot(waves,vec3(.026,.012,-.008))));
       vec3 eye = normalize(cameraPosition-surfacePosition);
       vec3 reflected = reflect(-eye,n);
-      reflected.y = max(.012,reflected.y);
+      reflected.y = max(.014,reflected.y);
       vec3 skyTint = samplePanorama(waterSky,normalize(reflected));
-      vec3 shoal = vec3(.235,.47,.415);
-      vec3 deep = vec3(.028,.185,.225);
-      vec3 body = mix(shoal,deep,1.-exp(-depth*.48));
-      float fresnel = .17+.50*pow(1.-clamp(dot(n,eye),0.,1.),3.);
-      vec3 water = mix(body,skyTint,fresnel);
-      float sun = pow(max(0.,dot(normalize(sunDirection+eye),n)),145.);
-      water += vec3(1.,.90,.76)*sun*.35;
-      // Sparse silver strokes break across the wind and dissolve in the distance.
-      float stroke = smoothstep(.85,.99,capillary)*smoothstep(.48,.90,crossWave)*fine;
-      water += vec3(.20,.31,.33)*stroke*(.24+.50*surfaceData.y);
-      diffuseColor.rgb = water;
-      diffuseColor.a = mix(.08,1.,smoothstep(0.,1.65,depth));
+      vec3 bedTint = vec3(.115,.19,.17) + surfaceData.z*vec3(.14,.11,.055) - surfaceData.w*vec3(.04,.055,.062);
+      vec3 body = mix(bedTint, vec3(.036,.118,.157), 1.-exp(-depth*.66));
+      float grazing = pow(1.-clamp(dot(n,eye),0.,1.),4.);
+      vec3 water = mix(body, skyTint, .07+.27*grazing);
+      float glint = pow(max(0.,dot(normalize(sunDirection+eye),n)),580.);
+      diffuseColor.rgb = water + vec3(.27,.25,.20)*glint;
       `,
       );
   };
@@ -115,11 +120,14 @@ export class CountyWaterView {
         pz = vertices[i + 2];
       const water = sampleCountyWater(px, pz);
       const y = water?.surfaceY ?? bed - 1;
+      const deposit = water && sampleCountySediment(px, pz);
       samples.push({
         x: px,
         y,
         z: pz,
         depth: y - bed,
+        sand: deposit?.sand ?? 0,
+        silt: deposit?.silt ?? 0,
         current: water?.kind === "creek" ? 1 : 0,
       });
     }
@@ -140,7 +148,7 @@ export class CountyWaterView {
       const base = positions.length / 3;
       for (const v of polygon) {
         positions.push(v.x, v.y, v.z);
-        data.push(v.depth, v.current);
+        data.push(v.depth, v.current, v.sand, v.silt);
       }
       for (let j = 1; j < polygon.length - 1; j++)
         faces.push(base, base + j, base + j + 1);
@@ -152,7 +160,7 @@ export class CountyWaterView {
       if (!faces.length) continue;
       const geo = new T.BufferGeometry();
       geo.setAttribute("position", new T.Float32BufferAttribute(positions, 3));
-      geo.setAttribute("waterData", new T.Float32BufferAttribute(data, 2));
+      geo.setAttribute("waterData", new T.Float32BufferAttribute(data, 4));
       geo.setIndex(faces);
       const mesh = new T.Mesh(geo, this.material);
       mesh.name = "county-water";

@@ -1,3 +1,8 @@
+import {
+  countyGrassSampling,
+  countyGrassSurface,
+} from "./county-grass-shader.ts";
+import { sampleCountySediment } from "./county-hydrology.ts";
 import { CountyWaterView } from "./county-water-view.ts";
 import { drawRegionalLandscape } from "./county-landscape.ts";
 import {
@@ -73,19 +78,26 @@ function groundGeometry(vertices: number[], indices: number[]) {
   geo.computeVertexNormals();
   const uv: number[] = [],
     colors: number[] = [],
+    sediment: number[] = [],
     dry: number[] = [];
-  const tint = new T.Color();
+  const tint = new T.Color(),
+    mineralTint = new T.Color(0xffffff);
   for (let i = 0; i < vertices.length; i += 3) {
     const x = vertices[i],
       z = vertices[i + 2];
     uv.push(x / 18, z / 18);
     const habitat = countyHabitat(x, z);
     tint.setHex(landColor(x, z, habitat));
+    const deposit = sampleCountySediment(x, z);
+    if (deposit)
+      tint.lerp(mineralTint, deposit.sand + deposit.silt + deposit.gravel);
     colors.push(tint.r, tint.g, tint.b);
     dry.push(habitat.dry);
+    sediment.push(deposit?.sand ?? 0, deposit?.silt ?? 0, deposit?.gravel ?? 0);
   }
   geo.setAttribute("uv", new T.Float32BufferAttribute(uv, 2));
   geo.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
+  geo.setAttribute("sediment", new T.Float32BufferAttribute(sediment, 3));
   geo.setAttribute("dry", new T.Float32BufferAttribute(dry, 1));
   return geo;
 }
@@ -108,24 +120,21 @@ export async function drawCounty(city: City, group: T.Group) {
   terrainTint.onBeforeCompile = (shader) => {
     shader.uniforms.panorama = { value: textures.sky };
     shader.vertexShader =
-      "attribute float dry; varying float vDry; varying vec3 vTerrain;\n" +
+      "attribute vec3 sediment; varying vec3 vSediment; attribute float dry; varying float vDry; varying vec3 vTerrain;\n" +
       shader.vertexShader.replace(
         "#include <begin_vertex>",
-        "#include <begin_vertex>\nvDry=dry; vTerrain=(modelMatrix*vec4(position,1.)).xyz;",
+        "#include <begin_vertex>\nvSediment=sediment; vDry=dry; vTerrain=(modelMatrix*vec4(position,1.)).xyz;",
       );
     shader.fragmentShader =
-      "varying float vDry; varying vec3 vTerrain; uniform sampler2D panorama;\n" +
+      "varying vec3 vSediment; varying float vDry; varying vec3 vTerrain; uniform sampler2D panorama;\n" +
+      countyGrassSampling +
       panoramaSampling +
       "\n" +
       shader.fragmentShader
         .replace(
           "#include <map_fragment>",
           `
-      // Warp the fine repeat with a second, broader rock/scrub pattern.
-      vec3 broadPattern = texture2D(map, mat2(.78,-.62,.62,.78)*vMapUv*.19).rgb;
-      vec3 scrub = texture2D(map, vMapUv + broadPattern.rb*.24).rgb;
-      float eyeDistance = length(vTerrain-cameraPosition);
-      scrub = mix(scrub,broadPattern,.24+.50*smoothstep(55.,450.,eyeDistance));
+      ${countyGrassSurface}
       float grain = dot(scrub, vec3(.21,.72,.07));
       vec3 sand = vec3(.34 + .98 * grain);
       vec3 surfaceNormal = normalize(cross(dFdx(vTerrain),dFdy(vTerrain)));
@@ -138,7 +147,14 @@ export async function drawCounty(city: City, group: T.Group) {
       float shelf = .5+.5*sin(bed*.88+.82*sin(bed*.36));
       float seam = smoothstep(.68,.95,shelf)*(1.-smoothstep(.15,1.2,fwidth(bed)));
       sand *= mix(vec3(1.),vec3(.99,.81,.69)*(1.-.23*seam),exposure);
-      diffuseColor.rgb *= mix(scrub, sand, vDry);
+      vec3 upland = mix(scrub, sand, vDry);
+      // Transport sorts coarse gravel, pale sand and darker organic silts into
+      // different parts of the bank. Reuse filtered terrain grain at road speed.
+      float deposit = dot(vSediment, vec3(1.));
+      vec3 bank = vSediment.x * vec3(.51,.40,.265) * (.85 + .30*grain)
+                + vSediment.y * vec3(.22,.17,.115) * (.91 + .18*grain)
+                + vSediment.z * vec3(.36,.35,.325) * (.68 + .72*grain);
+      diffuseColor.rgb *= upland*(1.-min(1.,deposit)) + bank;
     `,
         )
         .replace(
