@@ -1,3 +1,4 @@
+import { roadsidePlaces } from "./county-highways.ts";
 import { COUNTY_SETTLEMENTS, terrainHeight } from "./county-plan.ts";
 import { dryCountry } from "./county-landcover.ts";
 import type { City } from "./world.ts";
@@ -6,9 +7,21 @@ export const countyPlaces = [
   { name: "Westhaven", x: -320, z: 0, radius: 190 },
   { name: "Eastbank", x: 320, z: 0, radius: 190 },
   ...COUNTY_SETTLEMENTS.map((p) => ({ ...p, radius: 115 })),
+  ...roadsidePlaces.map((p) => ({ ...p, radius: 25, landmark: true })),
 ];
 
-export function placeName(x: number, z: number) {
+export function placeName(x: number, z: number, plan: City["plan"]) {
+  for (const site of roadsidePlaces)
+    if (Math.hypot(site.x - x, site.z - z) < 25) return site.name;
+  const block = plan.blocks.find(
+    (b) =>
+      b.district &&
+      x >= b.minX - 4 &&
+      x <= b.maxX + 4 &&
+      z >= b.minZ - 4 &&
+      z <= b.maxZ + 4,
+  );
+  if (block) return (x < 0 ? "Westhaven" : "Eastbank") + " · " + block.district;
   if (z >= -1055 && z <= -876 && x >= 680 && x <= 880)
     return "Red Mesa · Civic District";
   for (const place of countyPlaces)
@@ -55,17 +68,42 @@ export function countyAtlas(city: City) {
         ")";
       ctx.fillRect(x, z, 16, 16);
     }
-  ctx.fillStyle = "#c4cbd0";
-  for (const b of city.plan.parcels)
+  for (const b of city.plan.parcels) {
+    ctx.fillStyle =
+      b.floors >= 5 ? "#9caab6" : b.floors > 1 ? "#bbc4ca" : "#ced2c9";
     ctx.fillRect(b.x - b.w / 2, b.z - b.d / 2, b.w, b.d);
+  }
   ctx.lineCap = "round";
   for (const road of city.plan.streets) {
     ctx.lineWidth = road.width * 0.72;
-    ctx.strokeStyle = road.class === "arterial" ? "#718199" : "#a3adbb";
+    ctx.strokeStyle = road.endWidths
+      ? "#94683e"
+      : road.class === "arterial"
+        ? "#718199"
+        : "#a3adbb";
     ctx.beginPath();
     ctx.moveTo(road.a[0], road.a[2]);
     ctx.lineTo(road.b[0], road.b[2]);
     ctx.stroke();
+  }
+  ctx.strokeStyle = "#f3c97e";
+  ctx.lineWidth = 2;
+  for (const road of city.plan.streets) {
+    if (!road.endWidths) continue;
+    ctx.beginPath();
+    ctx.moveTo(road.a[0], road.a[2]);
+    ctx.lineTo(road.b[0], road.b[2]);
+    ctx.stroke();
+  }
+  ctx.font = "bold 10px sans-serif";
+  ctx.textAlign = "center";
+  ctx.lineWidth = 2.5;
+  for (const site of roadsidePlaces) {
+    ctx.fillStyle = "#965b3e";
+    ctx.fillRect(site.x - 3, site.z - 3, 6, 6);
+    ctx.strokeStyle = "#fff9e5";
+    ctx.strokeText(site.name, site.x, site.z - 7);
+    ctx.fillText(site.name, site.x, site.z - 7);
   }
   cached.set(city, canvas);
   return canvas;

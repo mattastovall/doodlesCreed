@@ -36,7 +36,10 @@ function move(ws: WebSocket, p: V3, yaw = 0, pitch = 0) {
 
 test("county sessions share usable doors and wall breaches across joins and resume, isolated by room", async () => {
   const city = countyWorld();
-  const doorIndex = city.boxes.findIndex((b) => b.piece === "door");
+  // Exercise a multi-storey factory with an upper floor to collapse.
+  const doorIndex = city.boxes.findIndex(
+    (b) => b.piece === "door" && b.buildingId?.endsWith("/works"),
+  );
   assert.ok(doorIndex >= 0, "County needs an interactive entrance");
   const door = city.boxes[doorIndex];
   const [x, , z] = door.p;

@@ -1,3 +1,4 @@
+import { roadsideStructures } from "./county-highways.ts";
 import { regionalTrees } from "./county-landcover.ts";
 import type { SeatInteraction } from "./county-car-access.ts";
 import { architectureLadders, cityLot } from "./county-architecture.ts";
@@ -65,11 +66,18 @@ export function countyLadders(boxes: Box[]) {
 export function countyWorld(): City {
   const { plan, lots } = planCounty();
   const spaces = parkedCars(lots);
-  const spawns: V3[] = spaces.map(({ p, yaw }) => [
-    p[0] + 2.25 * Math.cos(yaw),
-    p[1] + 0.05,
-    p[2] - 2.25 * Math.sin(yaw),
-  ]);
+  const spawns: V3[] = spaces.map(({ p, yaw }) => {
+    const x = p[0] - 2.25 * Math.cos(yaw);
+    const z = p[2] + 2.25 * Math.sin(yaw);
+    // Curbside players start on the sidewalk side of the car. Some city
+    // blocks carry their raised concrete apron all the way to this point.
+    const onApron = lots.some(
+      (l) =>
+        Math.abs(x - l.x) < l.w / 2 + 0.33 &&
+        Math.abs(z - l.z) < l.d / 2 + 0.33,
+    );
+    return [x, (onApron ? 0.15 : p[1]) + 0.05, z];
+  });
   const boxes = countyBlocks(lots),
     { nodes, links } = countyRoutes(plan.streets);
   // Keep non-solid road bounds available to city consumers. The oriented
@@ -127,7 +135,7 @@ export function countyWorld(): City {
           mesh: { vertices, indices },
         });
     }
-  boxes.push(...regionalTrees(plan, LIMIT));
+  boxes.push(...regionalTrees(plan, LIMIT), ...roadsideStructures());
   boxes.forEach((box, i) => {
     if (box.piece) box.pieceId = i;
   });

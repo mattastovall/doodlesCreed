@@ -5,7 +5,7 @@ import { architectureLadders, cityLot } from "../src/county-architecture.ts";
 import { CountyStructures } from "../src/county-structures.ts";
 
 test("every county structure has a furnished interior reachable through a street-level door", () => {
-  for (let design = 0; design <= 12; design++)
+  for (let design = 0; design <= 16; design++)
     for (const variation of [0, 0.5, 0.95]) {
       const boxes = cityLot(10, -20, design, variation);
       const spatial = new Spatial(boxes);
@@ -38,7 +38,7 @@ test("every county structure has a furnished interior reachable through a street
 });
 
 test("each indoor ladder has capsule clearance through its hatch and a standing landing at both ends", () => {
-  for (let design = 0; design <= 12; design++)
+  for (let design = 0; design <= 16; design++)
     for (const variation of [0, 0.5, 0.95]) {
       const pieces = cityLot(0, 0, design, variation);
       const spatial = new Spatial(pieces);

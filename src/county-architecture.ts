@@ -9,6 +9,7 @@ export interface CountyPiece extends Box {
   frontage: Facade;
   face?: "front" | "back" | "left" | "right";
   sign?: string;
+  tint?: number;
   ladder?: Ladder;
   closedDoor?: { p: V3; s: V3 };
 }
@@ -736,6 +737,57 @@ export function cityLot(
           pitch: { bays: 1, rise: 2.75, ridge: 0.5 },
         },
       );
+      break;
+    case 15:
+      shell(
+        "meridian-building",
+        [
+          wing(0, 0, 28, 24, 9, 2, "civic"),
+          wing(0, -0.3, 22, 19, 39, 7, "civic"),
+          wing(0, -0.5, 15.5, 15, 51, 3, "civic"),
+          wing(0, -1, 10.5, 11, 59, 1, "clock"),
+          wing(0, -1, 6.5, 7, 65, 1, "civic"),
+        ],
+        { sign: "MERIDIAN BUILDING" },
+      );
+      break;
+    case 16:
+      shell(
+        "bank-tower",
+        [
+          wing(0, 0, 27, 22, 8.8, 2, "shops"),
+          wing(-1.2, 0, 21, 17, 43, 8, "glass"),
+          wing(1.5, -1.5, 15, 13, 62, 4, "glass"),
+          wing(4, -2, 9.5, 10, 72, 2, "glass"),
+        ],
+        { sign: "EASTBANK TRUST" },
+      );
+      break;
+    case 13: {
+      // Independent shop doors and upper flats line the same pedestrian frontage.
+      const names = [
+        ["BAKERY", "BOOKS"],
+        ["HARDWARE", "FLORIST"],
+        ["RECORDS", "COFFEE"],
+      ];
+      for (const [i, storefront] of names[tier].entries()) {
+        const dx = i ? 6.9 : -6.9;
+        shell(
+          "shop-flat-" + i,
+          [
+            wing(dx, 0, 13.2, 18, 4.4, 1, "shops"),
+            wing(dx, -0.5, 13.2, 17, 11.6 + ((tier + i) % 3), 2, "homes"),
+          ],
+          { sign: storefront },
+        );
+      }
+      break;
+    }
+    case 14:
+      shell("ranch-house", [wing(-2, -3, 14, 12, 3.9, 1, "homes")], {
+        porch: 7.4,
+        pitch: { bays: 1, rise: 2.7 + tier * 0.25, ridge: 0.5 },
+      });
       break;
     case 10:
       shell(

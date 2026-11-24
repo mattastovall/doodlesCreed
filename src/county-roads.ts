@@ -21,16 +21,17 @@ export function drawCountyRoads(
   for (const street of streets)
     for (const p of [street.a, street.b]) {
       const key = p.join(",");
+      const width = street.endWidths?.[p === street.a ? 0 : 1] ?? street.width;
       const existing = junctions.get(key);
       if (existing) {
         existing.arms.push(street);
-        existing.width = Math.max(existing.width, street.width);
+        existing.width = Math.max(existing.width, width);
         existing.urban ||= !ruralRoad(street);
       } else
         junctions.set(key, {
           p,
           arms: [street],
-          width: street.width,
+          width,
           urban: !ruralRoad(street),
         });
     }
@@ -90,10 +91,12 @@ export function drawCountyRoads(
     left: number,
     right: number,
     y: number,
+    leftEnd = left,
+    rightEnd = right,
   ) {
     const a = alongStreet(s, from, left),
-      b = alongStreet(s, to, left),
-      c = alongStreet(s, to, right),
+      b = alongStreet(s, to, leftEnd),
+      c = alongStreet(s, to, rightEnd),
       d = alongStreet(s, from, right);
     pavedPolygon(out, [a, b, c, d], y, s.id.startsWith("county-road-regional"));
   }
@@ -114,6 +117,7 @@ export function drawCountyRoads(
     }
   }
   const lamps: V3[] = [];
+  const routeStation = new Map<string, number>();
   for (const s of streets) {
     const rural = ruralRoad(s),
       half = s.width / 2;
@@ -124,34 +128,113 @@ export function drawCountyRoads(
       j.arms.length > 2 ? j.width / 2 + 1 : 0;
     const from = clipped(start),
       to = len - clipped(finish);
+    const station = routeStation.get(s.a.join(",")) ?? 0;
+    if (s.endWidths) routeStation.set(s.b.join(","), station + len);
     const shoulder = rural ? 0.85 : s.width >= 11 ? 2.25 : 1.45;
-    strip(shoulders, s, 0, 1, half + shoulder, -half - shoulder, 0.035);
-    strip(asphalt, s, 0, 1, half, -half, 0.048);
-    if (s.class === "arterial") {
-      const gap = 0.13;
-      for (const offset of [-gap, gap])
-        strip(
-          center,
-          s,
-          from / len,
-          to / len,
-          offset + 0.055,
-          offset - 0.055,
-          0.059,
-        );
-      if (rural)
-        for (const side of [-1, 1]) {
-          const offset = side * (half - 0.6);
+    const [widthA, widthB] = s.endWidths ?? [s.width, s.width];
+    const halfWidth = (t: number) => (widthA + (widthB - widthA) * t) / 2;
+    strip(
+      shoulders,
+      s,
+      0,
+      1,
+      widthA / 2 + shoulder,
+      -widthA / 2 - shoulder,
+      0.035,
+      widthB / 2 + shoulder,
+      -widthB / 2 - shoulder,
+    );
+    strip(
+      asphalt,
+      s,
+      0,
+      1,
+      widthA / 2,
+      -widthA / 2,
+      0.048,
+      widthB / 2,
+      -widthB / 2,
+    );
+    function stripe(
+      out: number[],
+      start: number,
+      finish: number,
+      lateral: (t: number) => number,
+      radius: number,
+      height: number,
+    ) {
+      const a = start / len,
+        b = finish / len;
+      strip(
+        out,
+        s,
+        a,
+        b,
+        lateral(a) + radius,
+        lateral(a) - radius,
+        height,
+        lateral(b) + radius,
+        lateral(b) - radius,
+      );
+    }
+    if (s.class === "arterial" && to > from) {
+      for (const side of [-1, 1]) {
+        const median = (t: number) =>
+          side * (0.13 + (s.endWidths ? (halfWidth(t) - 6) * 0.26 : 0));
+        stripe(center, from, to, median, 0.055, 0.059);
+        if (rural)
+          stripe(
+            paint,
+            from,
+            to,
+            (t) => side * (halfWidth(t) - 0.6),
+            0.065,
+            0.06,
+          );
+        if (s.endWidths) {
+          // The added outside lane opens from the shoulder as pavement widens.
+          for (
+            let dash = Math.floor((station + from) / 9) * 9 - station;
+            dash < to;
+            dash += 9
+          ) {
+            const meters = Math.max(from, dash),
+              finish = Math.min(to, dash + 3);
+            if (finish <= meters || halfWidth(meters / len) < 6.8) continue;
+            stripe(
+              paint,
+              meters,
+              finish,
+              (t) => side * (5.4 - (halfWidth(t) - 6) * 0.12),
+              0.08,
+              0.06,
+            );
+          }
+        }
+      }
+      if (s.endWidths) {
+        // Diagonal hatching widens with the painted median. It stops at every
+        // turnout so both directions can enter and leave without a barrier.
+        for (
+          let d = Math.ceil((station + from + 1.2) / 5) * 5 - station;
+          d + 1.2 < to;
+          d += 5
+        ) {
+          const spread = (halfWidth(d / len) - 6) * 0.26;
+          if (spread < 0.4) continue;
           strip(
             paint,
             s,
-            from / len,
-            to / len,
-            offset + 0.065,
-            offset - 0.065,
+            (d - 1) / len,
+            (d + 1) / len,
+            -spread + 0.08,
+            -spread - 0.08,
             0.06,
+            spread + 0.08,
+            spread - 0.08,
           );
         }
+      }
     } else if (s.width >= 10) {
       for (let distance = from + 3; distance + 3 < to; distance += 9)
         strip(

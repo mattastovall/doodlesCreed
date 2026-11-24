@@ -410,8 +410,12 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
               ? 0x484642
               : roof;
       if (!geometries.has(key)) geometries.set(key, pieceGeometry(box));
-      part(color, x, y, z, w, h, d, "plain", key);
-      part(color, x, y, z, w, h, d, "plain", key, true);
+      part(box.tint ?? color, x, y, z, w, h, d, "plain", key);
+      part(box.tint ?? color, x, y, z, w, h, d, "plain", key, true);
+    } else if (box.tint !== undefined && !box.sign) {
+      part(box.tint);
+      part(box.tint, x, y, z, w, h, d, "plain", "box", true);
+      continue;
     } else if (box.piece === "door") {
       if (box.kind === "entry-door")
         part(0x615d54, x, y, z, w, h, d, "plain", "elevation", true, "front");
@@ -692,15 +696,28 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
   }
   const transform = new T.Object3D(),
     tint = new T.Color();
+  // All materials in a city block share a visibility decision. Skipping the
+  // parent also skips sorting and submitting every interior batch below it.
+  const shells = new Map<string, T.Group>();
   for (const batch of batches.values()) {
+    const key = batch.center.join("/") + (batch.far ? "/far" : "/near");
+    let shell = shells.get(key);
+    if (!shell) {
+      shell = new T.Group();
+      shell.userData[batch.far ? "farCenter" : "detailCenter"] = batch.center;
+      shell.userData.detailRange = 125;
+      shell.visible = !batch.far;
+      shell.matrixAutoUpdate = false;
+      shells.set(key, shell);
+      group.add(shell);
+    }
     const mesh = new T.InstancedMesh(
       batch.geometry,
       batch.material,
       batch.parts.length,
     );
-    mesh.userData[batch.far ? "farCenter" : "detailCenter"] = batch.center;
-    mesh.userData.detailRange = 125;
-    mesh.visible = !batch.far;
+    mesh.userData.distantFacade = batch.far;
+    mesh.matrixAutoUpdate = false;
     mesh.receiveShadow = true;
     mesh.castShadow =
       !batch.far &&
@@ -743,7 +760,7 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
       }
       bindings.push({ mesh, initial, index });
     });
-    group.add(mesh);
+    shell.add(mesh);
   }
   const original = new T.Matrix4(),
     swing = new T.Matrix4(),
@@ -840,7 +857,7 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
       cluster.members.add(i);
       moving.set(i, { id, slots: [] });
       for (const binding of bindings) {
-        if (binding.mesh.userData.farCenter) continue;
+        if (binding.mesh.userData.distantFacade) continue;
         let batch = batches.get(binding.mesh);
         if (!batch) {
           batch = [];

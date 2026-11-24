@@ -1,3 +1,6 @@
+import { placeName } from "../src/county-atlas.ts";
+import { roadsidePlaces } from "../src/county-highways.ts";
+import { CountyStructures } from "../src/county-structures.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Group, Mesh, Texture, Vector3 } from "three";
@@ -31,7 +34,7 @@ test("county growth repeats by seed and changes street connectivity and parcels 
     alternate.blocks.map((b) => b.id),
     plan.blocks.map((b) => b.id),
   );
-  assert.equal(plan.landmarks.length, 9);
+  assert.equal(plan.landmarks.length, 14);
   for (const [town, kind] of [
     ["red-mesa", "ore-headframe"],
     ["laurel", "fire-lookout"],
@@ -55,7 +58,7 @@ test("county growth repeats by seed and changes street connectivity and parcels 
     assert.ok(landUses.includes(town < 0 ? 0 : 4));
   }
   const highway = plan.streets.filter(
-    (s) => ruralRoad(s) && !s.id.startsWith("county-road-regional"),
+    (s) => ruralRoad(s) && s.endWidths && !s.id.includes("regional"),
   );
   for (const s of highway) {
     for (const side of [-1, 1]) {
@@ -69,6 +72,50 @@ test("county growth repeats by seed and changes street connectivity and parcels 
       Math.min(...pass.map((s) => s.a[2])) >
       45,
   );
+});
+
+test("both cities have compact downtown blocks, larger suburban blocks and detached fringe homes", () => {
+  const { lots, plan } = planCounty();
+  for (const town of [-320, 320]) {
+    const city = lots.filter((lot) => lot.town === town);
+    const distance = (x: number, z: number) =>
+      Math.max(Math.abs(x - town), Math.abs(z));
+    assert.ok(city.length >= 50);
+    const tower = plan.landmarks.find(
+      (l) => l.id === (town < 0 ? "meridian-building" : "bank-tower"),
+    );
+    assert.ok(
+      tower && tower.size[1] >= 60 && distance(tower.p[0], tower.p[2]) < 55,
+    );
+    const districts = plan.blocks
+      .filter((b) => b.id.startsWith(town < 0 ? "mill-" : "terrace-"))
+      .map((b) => b.district);
+    assert.deepEqual(
+      new Set(districts),
+      new Set(["Downtown", "Suburbs", "Fringe"]),
+    );
+    const core = city.filter((l) => distance(l.x, l.z) < 92);
+    const fringe = city.filter((l) => distance(l.x, l.z) > 160);
+    assert.ok(
+      core.some((l) => l.choice === 4) && core.some((l) => l.choice === 13),
+    );
+    assert.ok(fringe.filter((l) => l.choice === 14).length >= 8);
+    const averageFrontage = (rows: typeof city) =>
+      rows.reduce(
+        (total, { front }) =>
+          total + Math.hypot(front.b[0] - front.a[0], front.b[2] - front.a[2]),
+        0,
+      ) / rows.length;
+    assert.ok(averageFrontage(core) + 8 < averageFrontage(fringe));
+    for (const s of plan.streets.filter((s) =>
+      s.id.startsWith(town < 0 ? "mill-" : "terrace-"),
+    ))
+      for (const side of [-0.5, 0.5])
+        for (const t of [0, 0.5, 1]) {
+          const p = alongStreet(s, t, s.width * side);
+          assert.equal(terrainHeight(p[0], p[2]), p[1], s.id);
+        }
+  }
 });
 
 test("all county street navigation joins one walkable network through both towns and the pass", () => {
@@ -193,14 +240,16 @@ test("both regional circuits reach built settlements over driveable grades", () 
   }
 });
 
-test("a saloon clears each regional carriageway and a driver can collect the service station car", () => {
+test("a saloon clears city streets and regional carriageways and a driver can collect the service station car", () => {
   const city = countyWorld(),
     fleet = countyCars(),
     drive = new CountyDriveWorld(city.boxes);
   for (const road of city.plan.streets.filter(
     (s) =>
       s.id.startsWith("county-road-regional") ||
-      s.id.startsWith("red-mesa-civic-"),
+      s.id.startsWith("red-mesa-civic-") ||
+      s.id.startsWith("mill-") ||
+      s.id.startsWith("terrace-"),
   )) {
     const dx = road.b[0] - road.a[0],
       dz = road.b[2] - road.a[2];
@@ -232,5 +281,74 @@ test("a saloon clears each regional carriageway and a driver can collect the ser
         car.kind,
       ),
     );
+  }
+});
+
+test("the Saltbrush–Red Mesa expressway carries four unobstructed lanes between tapered town entrances", () => {
+  const city = countyWorld(),
+    drive = new CountyDriveWorld(city.boxes);
+  const highway = city.plan.streets.filter((s) =>
+    s.id.startsWith("county-road-regional-1-"),
+  );
+  let fullWidth = 0;
+  assert.equal(highway[0].endWidths?.[0], 12);
+  assert.equal(highway.at(-1)?.endWidths?.[1], 12);
+  for (const [i, road] of highway.entries()) {
+    assert.ok(road.endWidths);
+    if (i) {
+      assert.deepEqual(highway[i - 1].b, road.a);
+      assert.equal(highway[i - 1].endWidths?.[1], road.endWidths[0]);
+    }
+    const dx = road.b[0] - road.a[0],
+      dz = road.b[2] - road.a[2];
+    const len = Math.hypot(dx, dz),
+      yaw = Math.atan2(-dx, -dz);
+    if (Math.min(...road.endWidths) < 19) continue;
+    fullWidth += len;
+    for (const meters of [-7, -3, 3, 7]) {
+      const samples = Math.ceil(len / 6);
+      for (let j = 0; j < samples; j++) {
+        assert.ok(
+          drive.legacyClear(
+            alongStreet(road, j / samples, meters),
+            yaw,
+            alongStreet(road, (j + 1) / samples, meters),
+            yaw,
+            "saloon",
+          ),
+          road.id,
+        );
+      }
+    }
+  }
+  assert.ok(fullWidth > 1200);
+});
+
+test("each intercity landmark has a driveable turnout, map label and destructible structure", () => {
+  const city = countyWorld(),
+    drive = new CountyDriveWorld(city.boxes);
+  const structures = new CountyStructures(city.boxes);
+  for (const site of roadsidePlaces) {
+    assert.ok(city.plan.landmarks.some((l) => l.id === site.id));
+    assert.equal(placeName(site.x, site.z, city.plan), site.name);
+    const road = city.plan.streets.find(
+      (r) => r.id === "county-road-turnout-" + site.id,
+    )!;
+    assert.ok(city.plan.streets.some((r) => r !== road && r.a === road.a));
+    const yaw = Math.atan2(road.a[0] - road.b[0], road.a[2] - road.b[2]);
+    const steps = Math.ceil(
+      Math.hypot(road.a[0] - road.b[0], road.a[2] - road.b[2]) / 6,
+    );
+    for (let i = 0; i < steps; i++) {
+      const a = alongStreet(road, i / steps),
+        b = alongStreet(road, (i + 1) / steps);
+      assert.ok(drive.legacyClear(a, yaw, b, yaw, "saloon"));
+    }
+    const pieces = city.boxes.filter((b) => b.buildingId === site.id);
+    assert.ok(pieces.length >= 6);
+    assert.ok(pieces.every((b) => b.pieceId !== undefined && b.solid));
+    const target = pieces[0];
+    structures.damage(target.pieceId!, 125);
+    assert.equal(target.solid, false);
   }
 });

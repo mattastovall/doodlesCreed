@@ -1,12 +1,11 @@
 import * as T from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { clearOfLotsAndRoads, dryCountry } from "./county-landcover.ts";
-import { terrainHeight } from "./county-plan.ts";
+import { regionalUnderbrush } from "./county-landcover.ts";
 import { randomSeed, type City } from "./world.ts";
 
 // Make each species one instanced draw per visible grove, including bark.
 // Dimensions are normalized to the height of the matching trunk collider.
-function treeShape(pine: boolean) {
+function treeShape(pine: boolean, distant = false) {
   const pieces: T.BufferGeometry[] = [];
   const add = (geo: T.BufferGeometry, color: number) => {
     geo.deleteAttribute("uv");
@@ -18,14 +17,25 @@ function treeShape(pine: boolean) {
     pieces.push(geo);
   };
   add(
-    new T.CylinderGeometry(0.012, pine ? 0.024 : 0.045, 0.82, 7).translate(
-      0,
-      0.41,
-      0,
-    ),
+    new T.CylinderGeometry(
+      0.012,
+      pine ? 0.024 : 0.045,
+      0.82,
+      distant ? 4 : 7,
+    ).translate(0, 0.41, 0),
     0x776a57,
   );
-  if (pine) {
+  if (distant && pine) {
+    add(new T.ConeGeometry(0.225, 0.58, 6).translate(0, 0.43, 0), 0x476858);
+    add(new T.ConeGeometry(0.145, 0.55, 6).translate(0, 0.75, 0), 0x668968);
+  } else if (distant) {
+    add(
+      new T.SphereGeometry(1, 7, 4)
+        .scale(0.54, 0.36, 0.54)
+        .translate(0, 0.7, 0),
+      0x80935f,
+    );
+  } else if (pine) {
     for (let layer = 0; layer < 5; layer++) {
       const height = 0.37 - layer * 0.02,
         radius = 0.21 - layer * 0.029;
@@ -114,88 +124,150 @@ function yuccaRosette() {
   return shape;
 }
 
+// Paired opaque meshes use the same coverage threshold. Instance distance
+// drives the blend so a grove does not switch all its trees at once.
+const canopyFadeStart = 115,
+  canopyFadeEnd = 170;
+function canopyMaterial(distant: boolean) {
+  const material = new T.MeshLambertMaterial({ vertexColors: true });
+  material.customProgramCacheKey = () =>
+    distant ? "canopy-far" : "canopy-near";
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader =
+      "varying float canopyFade;\n" +
+      shader.vertexShader.replace(
+        "#include <project_vertex>",
+        `#include <project_vertex>
+       float treeRange = length((modelMatrix * instanceMatrix[3]).xz - cameraPosition.xz);
+       canopyFade = smoothstep(${canopyFadeStart}.0, ${canopyFadeEnd}.0, treeRange);
+       if (${distant ? "canopyFade <= 0.0" : "canopyFade >= 1.0"}) gl_Position = vec4(2.0, 0.0, 0.0, 1.0);`,
+      );
+    shader.fragmentShader =
+      "varying float canopyFade;\n" +
+      shader.fragmentShader.replace(
+        "#include <clipping_planes_fragment>",
+        `#include <clipping_planes_fragment>
+       float threshold = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy),vec2(0.06711056,0.00583715))));
+       if (threshold ${distant ? ">=" : "<"} canopyFade) discard;`,
+      );
+  };
+  return material;
+}
+
+function fernShape() {
+  const pos: number[] = [];
+  for (let j = 0; j < 7; j++) {
+    const angle = j * 2.4,
+      dx = Math.cos(angle),
+      dz = Math.sin(angle);
+    const length = 0.65 + 0.24 * Math.cos(j) ** 2;
+    for (let k = 1; k <= 6; k++) {
+      const t = k / 7,
+        x = dx * t * length,
+        z = dz * t * length;
+      const y = 0.48 * Math.sin(t * 2.1);
+      const span = 0.15 * Math.sin(Math.PI * t);
+      for (const side of [-1, 1])
+        pos.push(
+          x,
+          y,
+          z,
+          x + dx * 0.1 - dz * side * span,
+          y + 0.055,
+          z + dz * 0.1 + dx * side * span,
+          x + dx * 0.14,
+          y + 0.045,
+          z + dz * 0.14,
+        );
+    }
+  }
+  const geometry = new T.BufferGeometry();
+  geometry.setAttribute("position", new T.Float32BufferAttribute(pos, 3));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
 export function drawRegionalLandscape(group: T.Group, city: City) {
-  const random = randomSeed("switchback-underbrush"),
-    transform = new T.Object3D();
+  const random = randomSeed("switchback-foliage-appearance");
+  const transform = new T.Object3D();
   const pine = treeShape(true),
     orchard = treeShape(false);
-  const yucca = yuccaRosette();
+  const distantPine = treeShape(true, true),
+    distantOrchard = treeShape(false, true);
+  const nearMaterial = canopyMaterial(false),
+    farMaterial = canopyMaterial(true);
+  const yucca = yuccaRosette(),
+    sage = new T.IcosahedronGeometry(1, 0),
+    fern = fernShape();
   const blades = new T.MeshLambertMaterial({
     color: 0x849875,
     side: T.DoubleSide,
   });
-  const brush = new T.IcosahedronGeometry(1, 0);
-  const foliage = new T.MeshLambertMaterial({ vertexColors: true });
-  const sage = new T.MeshLambertMaterial({
+  const brush = new T.MeshLambertMaterial({
     color: 0x9b9a79,
     flatShading: true,
+  });
+  const fronds = new T.MeshLambertMaterial({
+    color: 0x607e4f,
+    side: T.DoubleSide,
   });
   const batches = new Map<
     string,
     { geo: T.BufferGeometry; material: T.Material; matrices: T.Matrix4[] }
   >();
-  function place(
-    x: number,
-    y: number,
-    z: number,
-    geo: T.BufferGeometry,
-    material: T.Material,
-    w: number,
-    h: number,
-    d: number,
-  ) {
-    const key = geo.id + "/" + Math.floor(x / 360) + "/" + Math.floor(z / 360);
+  function add(geo: T.BufferGeometry, material: T.Material, tile: number) {
+    const key =
+      geo.id +
+      "/" +
+      Math.floor(transform.position.x / tile) +
+      "/" +
+      Math.floor(transform.position.z / tile);
     let batch = batches.get(key);
     if (!batch) {
       batch = { geo, material, matrices: [] };
       batches.set(key, batch);
     }
-    transform.position.set(x, y, z);
-    transform.rotation.y = random() * Math.PI * 2;
-    transform.scale.set(w, h, d);
-    transform.updateMatrix();
     batch.matrices.push(transform.matrix.clone());
   }
   for (const b of city.boxes) {
     if (b.kind !== "county-pine" && b.kind !== "county-orchard") continue;
-    const h = b.s[1];
-    place(
-      b.p[0],
-      b.p[1] - h / 2,
-      b.p[2],
-      b.kind === "county-pine" ? pine : orchard,
-      foliage,
-      h,
-      h,
-      h,
-    );
+    const h = b.s[1],
+      conifer = b.kind === "county-pine";
+    transform.position.set(b.p[0], b.p[1] - h / 2, b.p[2]);
+    transform.rotation.y = random() * Math.PI * 2;
+    transform.scale.setScalar(h);
+    transform.updateMatrix();
+    add(conifer ? pine : orchard, nearMaterial, 128);
+    add(conifer ? distantPine : distantOrchard, farMaterial, 448);
   }
-  for (let i = 0; i < 3800; i++) {
-    const x = (random() * 2 - 1) * city.bounds,
-      z = (random() * 2 - 1) * city.bounds;
-    if (dryCountry(x, z) < 0.15 || !clearOfLotsAndRoads(city.plan, x, z))
-      continue;
-    if (random() < 0.42) {
-      const size = 0.6 + random() * 0.95;
-      place(x, terrainHeight(x, z), z, yucca, blades, size, size, size);
-      continue;
-    }
-    const h = 0.22 + random() * 0.48;
-    place(
-      x,
-      terrainHeight(x, z) + h * 0.35,
-      z,
-      brush,
-      sage,
-      h * 1.7,
-      h,
-      h * 1.4,
-    );
+  for (const { kind, size, x, y, z } of regionalUnderbrush(
+    city.plan,
+    city.bounds,
+  )) {
+    transform.position.set(x, y + (kind === "sage" ? size * 0.35 : 0), z);
+    transform.rotation.y = random() * Math.PI * 2;
+    if (kind === "sage") transform.scale.set(size * 1.7, size, size * 1.4);
+    else transform.scale.setScalar(size);
+    transform.updateMatrix();
+    if (kind === "yucca") add(yucca, blades, 192);
+    else if (kind === "sage") add(sage, brush, 192);
+    else add(fern, fronds, 192);
   }
   for (const { geo, material, matrices } of batches.values()) {
     const mesh = new T.InstancedMesh(geo, material, matrices.length);
     matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
     mesh.computeBoundingSphere();
+    const { center, radius } = mesh.boundingSphere!;
+    const far = material === farMaterial;
+    mesh.name = far
+      ? "canopy-far"
+      : material === nearMaterial
+        ? "canopy-near"
+        : "ground-cover";
+    mesh.userData[far ? "farCenter" : "detailCenter"] = [center.x, center.z];
+    mesh.userData.detailRange = far
+      ? canopyFadeStart - radius
+      : (material === nearMaterial ? canopyFadeEnd : 125) + radius;
     group.add(mesh);
   }
 }

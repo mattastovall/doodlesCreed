@@ -47,6 +47,7 @@ export interface Street {
   a: V3;
   b: V3;
   width: number;
+  endWidths?: [number, number];
   class: "arterial" | "local";
 }
 export interface Parcel {
@@ -68,6 +69,7 @@ export interface CityPlan {
   parcels: Parcel[];
   blocks: {
     id: string;
+    district?: "Downtown" | "Suburbs" | "Fringe";
     minX: number;
     maxX: number;
     minZ: number;

@@ -2645,6 +2645,8 @@ class Game {
       for (const t of this.shops?.tills ?? []) {
         if (!t.box.solid) continue;
         const [x, , z] = t.box.p;
+        if (Math.abs(x - cx) * scale > 103 || Math.abs(z - cz) * scale > 103)
+          continue;
         c.fillStyle = "#256d61";
         c.beginPath();
         c.arc(x, z, 5.8, 0, Math.PI * 2);
@@ -2664,17 +2666,20 @@ class Game {
       c.restore();
       c.save();
       if (overview) {
-        c.font = "600 5.3px sans-serif";
         c.textAlign = "center";
         c.lineJoin = "round";
         c.lineWidth = 1.6;
         c.strokeStyle = "#fffdf1";
-        c.fillStyle = "#283b54";
         for (const place of countyPlaces) {
+          const landmark = "landmark" in place;
           const x = 95 + place.x * scale,
-            y = 95 + place.z * scale - 6;
-          c.strokeText(place.name, x, y);
-          c.fillText(place.name, x, y);
+            y = 95 + place.z * scale;
+          c.font = landmark ? "500 4.3px sans-serif" : "600 5.3px sans-serif";
+          c.fillStyle = landmark ? "#814c31" : "#283b54";
+          if (landmark) c.fillRect(x - 1, y - 1, 2, 2);
+          const labelY = y + (landmark && place.z > -700 ? 6 : -5);
+          c.strokeText(place.name, x, labelY);
+          c.fillText(place.name, x, labelY);
         }
       }
       this.drawMapPlayers(c, cx, cz, scale);
@@ -2691,7 +2696,7 @@ class Game {
       c.fill();
       c.restore();
       c.restore();
-      $("neighborhood-label").textContent = placeName(p.x, p.z);
+      $("neighborhood-label").textContent = placeName(p.x, p.z, this.city.plan);
       return;
     }
     const mapBounds = this.city.arena

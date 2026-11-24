@@ -1,3 +1,4 @@
+import { surveyHighways } from "./county-highways.ts";
 import { randomSeed, type V3 } from "./world.ts";
 import type { CityPlan, NeighborhoodId, Street } from "./city-plan.ts";
 
@@ -145,12 +146,13 @@ export function elevation(x: number, z: number) {
   const townShoulder = Math.min(
     ...TOWNS.map(
       (t) =>
-        Math.max(0, Math.max(Math.abs(x - t) - 220, Math.abs(z) - 220)) / 100,
+        Math.max(0, Math.max(Math.abs(x - t) - 280, Math.abs(z) - 285)) / 100,
     ),
   );
   const hills = Math.min(1, valleyShoulder, townShoulder);
   const oldHills =
     hills * hills * (38 + 23 * Math.sin(x / 93) + 15 * Math.cos(z / 72));
+  if (townShoulder === 0) return 0;
   if (hills === 0 && Math.abs(x) < 600 && Math.abs(z) < 220) return oldHills;
   let distance = 145;
   for (const town of COUNTY_SETTLEMENTS)
@@ -250,26 +252,16 @@ export function alongStreet(s: Street, t: number, offset = 0): V3 {
 // market and more breathing room uphill. Every block retains through frontage.
 function rowBoundaries(west: boolean, row: number, xs: number[], seed: string) {
   const rand = randomSeed(seed + (west ? "-mill-" : "-terrace-") + row);
-  const edgeDistance = Math.min(Math.abs(row - 2), Math.abs(row - 3));
-  const fringe = () =>
-    edgeDistance === 0 ? 0 : Math.floor(edgeDistance * (0.4 + rand() * 0.67));
+  const edgeDistance = Math.min(Math.abs(row - 3), Math.abs(row - 4));
+  const fringe = () => Math.floor(edgeDistance * (0.35 + rand() * 0.48));
   const first = fringe(),
     end = xs.length - 1 - fringe();
   const boundaries = [first];
   for (let i = first + 1; i < end; i++) {
     const previous = boundaries[boundaries.length - 1];
-    const collector = i === (west ? 3 : 2);
-    const landmarkAccess = (row === 3 || row === 4) && i >= 2 && i <= 4;
-    const yard = west && i <= 2;
-    const mergeChance = yard
-      ? 0.64
-      : 0.1 + edgeDistance * (west ? 0.045 : 0.12);
-    if (
-      xs[i + 1] - xs[previous] > 131 ||
-      collector ||
-      landmarkAccess ||
-      rand() > mergeChance
-    )
+    const core = edgeDistance < 2 && i >= 2 && i <= 6;
+    const mergeChance = west && i < 3 ? 0.58 : 0.17 + edgeDistance * 0.08;
+    if (core || xs[i + 1] - xs[previous] > 130 || rand() > mergeChance)
       boundaries.push(i);
   }
   boundaries.push(end);
@@ -290,6 +282,10 @@ const lotKinds = [
   "walkup",
   "ore-headframe",
   "fire-lookout",
+  "high-street",
+  "ranch-house",
+  "meridian-building",
+  "bank-tower",
 ];
 function lotFloors(choice: number, variation: number) {
   return [
@@ -306,6 +302,10 @@ function lotFloors(choice: number, variation: number) {
     3 + Math.floor(variation * 3),
     4,
     5,
+    3,
+    1,
+    14,
+    16,
   ][choice];
 }
 
@@ -324,38 +324,36 @@ export function planCounty(seed = COUNTY) {
     // Freight yards grew on a narrow rectilinear survey. The eastern terraces
     // fan apart away from the market, joined by short streets across the slope.
     const xs = west
-      ? [-170, -108, -52, 0, 51, 106, 167]
-      : [-164, -101, -42, 13, 76, 144];
+      ? [-234, -167, -100, -51, 0, 46, 92, 150, 226]
+      : [-226, -160, -102, -54, -5, 42, 89, 147, 222];
     const zs = west
-      ? [-155, -101, -51, 0, 51, 105, 158]
-      : [-157, -104, -54, 0, 54, 114, 168];
+      ? [-238, -162, -94, -45, 0, 45, 92, 153, 232]
+      : [-230, -156, -94, -46, 0, 47, 95, 157, 227];
     const spans = zs.slice(1).map((_, j) => rowBoundaries(west, j, xs, seed));
     const points: V3[][] = zs.map((v, j) =>
       xs.map((u, i) => {
-        const spread = west ? 1 : 1 + 0.0008 * v;
+        const spread = west ? 1 : 1 + 0.0004 * v;
         const skew = west
-          ? i === 3
+          ? i === 4
             ? 0
             : v * 0.035 * Math.sin(i)
-          : v * 0.12 + Math.sin(v / 65) * 8;
+          : v * 0.065 + Math.sin(v / 65) * 4;
         const x = town + u * spread + skew;
         // Both main streets follow the same valley as the inter-town highway.
         const terrace = west
           ? v * 0.025 * Math.sin(i)
-          : v * 0.075 * Math.sin(i * 1.1 + j * 0.35);
+          : v * 0.04 * Math.sin(i * 1.1 + j * 0.35);
         return [x, 0, valleyZ(x) + v + terrace];
       }),
     );
-    gateways.push(points[3][0], points[3][xs.length - 1]);
+    gateways.push(points[4][0], points[4][xs.length - 1]);
     const streets = new Map<string, Street>();
     function segment(i: number, j: number, horizontal: boolean) {
       const id = `${west ? "mill" : "terrace"}-${horizontal ? "h" : "v"}${i}-${j}`;
       const existing = streets.get(id);
       if (existing) return existing;
-      const arterial = horizontal && j === 3;
-      const collector = horizontal
-        ? j === (west ? 2 : 4)
-        : i === (west ? 3 : 2);
+      const arterial = horizontal && j === 4;
+      const collector = horizontal ? j === (west ? 3 : 5) : i === 4;
       const width = arterial ? 14 : collector ? 11 : west ? 8.6 : 7.6;
       const street: Street = {
         id,
@@ -387,65 +385,69 @@ export function planCounty(seed = COUNTY) {
           ? start < 2
             ? "works"
             : "market"
-          : Math.abs(j - 3) < 2
+          : Math.abs(j - 3.5) <= 1.5
             ? "press"
             : "heights";
+        const blockRing = Math.max(
+          Math.abs((start + end - 1) / 2 - 3.5),
+          Math.abs(j - 3.5),
+        );
         plan.blocks.push({
           id,
+          district:
+            blockRing < 2 ? "Downtown" : blockRing < 3 ? "Suburbs" : "Fringe",
           neighborhood,
           minX: Math.min(...vertices.map((p) => p[0])),
           maxX: Math.max(...vertices.map((p) => p[0])),
           minZ: Math.min(...vertices.map((p) => p[2])),
           maxZ: Math.max(...vertices.map((p) => p[2])),
         });
-        // A merged freight block has a single yard. Other large blocks have
-        // independent street frontages and a foot passage between them.
-        const count = west && start < 2 ? 1 : end - start;
-        for (let n = 0; n < count; n++) {
-          const index = count === 1 ? Math.floor((end - start - 1) / 2) : n;
-          const front = south[index],
-            back = north[index];
+        // A merged block retains separate addresses along its through street.
+        for (let n = 0; n < end - start; n++) {
+          const front = south[n],
+            back = north[n];
           const fy = 0.46 + rand() * 0.1,
             fx = 0.46 + rand() * 0.08;
           const a = alongStreet(front, fx),
             b = alongStreet(back, fx);
           const x = b[0] + (a[0] - b[0]) * fy,
             z = b[2] + (a[2] - b[2]) * fy;
+          const column = start + n;
+          const ring = Math.max(Math.abs(column - 3.5), Math.abs(j - 3.5));
           const landmark =
-            j === 3 && start === 2 && n === 0
+            j === 4 && column === 3
               ? "hall"
-              : j === 3 && start === 3 && n === 0
+              : j === 4 && column === 4
                 ? "market"
-                : j === 4 && start === 3 && n === 0
+                : j === 5 && column === 4
                   ? "cinema"
                   : undefined;
-          const palette = west
-            ? start < 2
-              ? [0, 0, 0, 2]
-              : Math.abs(j - 3) < 2
-                ? [2, 2, 1, 3]
-                : [1, 1, 0, 1]
-            : Math.abs(j - 3) < 2
-              ? [4, 4, 2, 2, 3]
-              : [1, 1, 2, 3];
-          const parkingChoice =
-            landmark === "hall"
-              ? 5
-              : landmark === "market"
-                ? 6
-                : landmark === "cinema"
-                  ? 3
-                  : palette[Math.floor(rand() * palette.length)];
-          const choice =
-            !landmark && (j === 0 || j === 5) && (start + n) % 2 === 0
+          // Short downtown frontages give way to broad plots with a single
+          // detached house. Freight sheds line the western approach.
+          const palette =
+            ring < 2
               ? west
-                ? j === 0
-                  ? 8
-                  : 9
-                : j === 0
-                  ? 7
-                  : 10
-              : parkingChoice;
+                ? [13, 2, 13, 10, 4]
+                : [4, 2, 13, 4, 10]
+              : ring < 3
+                ? west && column <= 2
+                  ? [0, 0, 1, 8]
+                  : [1, 7, 10, 1, 13]
+                : Math.abs(j - 3.5) === 0.5
+                  ? [9, 8, 14]
+                  : [14, 14, 14, 7];
+          const choice =
+            j === 3 && column === 4
+              ? west
+                ? 15
+                : 16
+              : landmark === "hall"
+                ? 5
+                : landmark === "market"
+                  ? 6
+                  : landmark === "cinema"
+                    ? 3
+                    : palette[Math.floor(rand() * palette.length)];
           // Inscribe the paved apron between the four road rights-of-way. The
           // separating axis projects the axis-aligned pad onto each road normal.
           let w = Math.min(45, Math.abs(front.b[0] - front.a[0]) - 13),
@@ -465,6 +467,10 @@ export function planCounty(seed = COUNTY) {
             w *= ratio;
             d *= ratio;
           }
+          if (choice === 14) {
+            w = Math.min(w, 23);
+            d = Math.min(d, 24);
+          }
           const lot = {
             town,
             x,
@@ -472,7 +478,6 @@ export function planCounty(seed = COUNTY) {
             w,
             d,
             choice,
-            parkingChoice,
             variation: rand(),
             front,
             side: n === 0 ? left : right,
@@ -492,6 +497,12 @@ export function planCounty(seed = COUNTY) {
             kind: lotKinds[choice],
             floors: lotFloors(choice, lot.variation),
           });
+          if (choice === 15 || choice === 16)
+            plan.landmarks.push({
+              id: lotKinds[choice],
+              p: [x, 0, z],
+              size: [w, choice === 15 ? 65 : 72, d],
+            });
           if (landmark)
             plan.landmarks.push({
               id: `${id}-${landmark}`,
@@ -704,6 +715,7 @@ export function planCounty(seed = COUNTY) {
       return lot;
     }
   }
+  surveyHighways(plan);
   return { plan, lots };
 }
 

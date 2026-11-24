@@ -10,12 +10,14 @@ test("destroying a pump column clears its near and distant images and emits a si
   )!;
   const group = new Group();
   countyBuildings(group, [column]);
-  const meshes = group.children as InstancedMesh[];
+  const meshes = group.children;
   assert.equal(meshes.length, 2);
-  const near = meshes.find((m) => m.userData.detailCenter)!;
-  const far = meshes.find((m) => m.userData.farCenter)!;
-  assert.deepEqual(near.userData.detailCenter, far.userData.farCenter);
-  assert.equal(near.userData.detailRange, far.userData.detailRange);
+  const nearCell = meshes.find((m) => m.userData.detailCenter)!;
+  const farCell = meshes.find((m) => m.userData.farCenter)!;
+  assert.deepEqual(nearCell.userData.detailCenter, farCell.userData.farCenter);
+  assert.equal(nearCell.userData.detailRange, farCell.userData.detailRange);
+  const near = nearCell.children[0] as InstancedMesh;
+  const far = farCell.children[0] as InstancedMesh;
   const volume = (mesh: InstancedMesh) => {
     const pose = new Matrix4();
     mesh.getMatrixAt(0, pose);
