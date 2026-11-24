@@ -1,3 +1,4 @@
+import { windowPassage } from "../src/window-vault.ts";
 import {
   advanceSeatAction,
   besideCar,
@@ -1311,6 +1312,23 @@ export class Rooms {
           r.spatial.ray.bind(r.spatial),
         );
         if (event) send(ws, { type: "crime", record: p.crime, event });
+      }
+      return;
+    }
+    if (m.type === "vault-glass" && r.structures) {
+      const pane = Number.isInteger(m.index)
+        ? r.city.boxes[m.index]
+        : undefined;
+      if (!pane?.solid || vehicle || p.hp <= 0 || p.ready === false) return;
+      const dir: V3 = [-Math.sin(p.yaw), 0, -Math.cos(p.yaw)];
+      const route = windowPassage(pane, p.p, dir);
+      if (
+        route &&
+        r.spatial.ray(route.origin, dir, route.travel + 0.06)?.box === pane &&
+        r.spatial.clear(route.target, 1.12)
+      ) {
+        r.structures.damage(m.index, 30);
+        this.countyVandalism(p);
       }
       return;
     }

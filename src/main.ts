@@ -605,6 +605,11 @@ class Game {
   noticeUntil = 0;
   input = idleInput();
   keys = new Set<string>();
+  private jumpQueued = false;
+  private clearKeys() {
+    this.keys.clear();
+    this.jumpQueued = false;
+  }
   firing = false;
   aiming = false;
   viewMotion = new ViewMotion();
@@ -784,8 +789,16 @@ class Game {
                 !detached &&
                 !this.restoringStructures &&
                 this.state === "play"
-              )
+              ) {
                 this.debris?.break(box, this.player.position);
+                if (box.kind === "window") {
+                  const range = this.player.position.distanceTo(
+                    new T.Vector3(...box.p),
+                  );
+                  if (range < 16)
+                    this.audio.noise(0.11, 0.22 * (1 - range / 16));
+                }
+              }
               physics.updateStructure(box);
               box.onPieceState?.(state);
             },
@@ -794,6 +807,16 @@ class Game {
         : undefined;
     if (this.mode === "online") this.restoreStructures();
     this.player = new Controller(physics, spawn ?? city.spawns[0]);
+    if (this.structures)
+      this.player.onVaultGlass = (box) => {
+        if (this.mode === "online") {
+          this.sendState();
+          this.network.send({ type: "vault-glass", index: box.pieceId });
+        } else {
+          this.structures!.damage(box.pieceId!, 30);
+          this.countyVandalism();
+        }
+      };
     this.player.ladders =
       city.arena?.ladders ?? (seed === COUNTY ? countyLadders(city.boxes) : []);
     this.player.grappleEnabled = !city.arena && seed !== COUNTY;
@@ -1031,7 +1054,7 @@ class Game {
     if (this.mode === "online" && !this.network.active) return;
     this.closeDialog();
     this.state = "play";
-    this.keys.clear();
+    this.clearKeys();
     this.firing = false;
     this.audio.init();
     const lock = canvas.requestPointerLock();
@@ -1047,7 +1070,7 @@ class Game {
   pause() {
     if (this.state !== "play") return;
     this.state = "paused";
-    this.keys.clear();
+    this.clearKeys();
     this.firing = false;
     this.aiming = false;
     document.exitPointerLock();
@@ -1074,7 +1097,7 @@ class Game {
     this.network.disconnect();
     this.state = "menu";
     this.mode = this.soloMode;
-    this.keys.clear();
+    this.clearKeys();
     document.exitPointerLock();
     this.closeDialog();
     $("hud").classList.add("hidden");
@@ -1327,6 +1350,8 @@ class Game {
       if (this.state !== "play") return;
       this.keys.add(e.code);
       if (e.repeat) return;
+      if (e.code === "Space" && this.vehicle < 0 && !this.seatPending)
+        this.jumpQueued = true;
       if (
         e.code === "KeyB" &&
         this.shops &&
@@ -1442,7 +1467,7 @@ class Game {
       { passive: false },
     );
     window.addEventListener("blur", () => {
-      this.keys.clear();
+      this.clearKeys();
       this.firing = false;
       if (this.state === "play") this.pause();
     });
@@ -1602,7 +1627,10 @@ class Game {
     const controls = [
       ["W A S D / Mouse", "Move / look"],
       ["Shift / Ctrl", "Sprint / crouch or slide"],
-      ["Space", "Jump, vault or mantle"],
+      [
+        "Space",
+        "Jump, vault or mantle. Move forward to vault through a County window.",
+      ],
       ["Space / F in air", "Double jump or boost"],
       ...(this.player.grappleEnabled
         ? [["Q / E", "Hook or release. Hold to reel in."]]
@@ -1764,7 +1792,7 @@ class Game {
       0,
       (m.fireRemaining ?? player.fireRemaining ?? 0) / 1000,
     );
-    this.keys.clear();
+    this.clearKeys();
     this.firing = false;
     this.aiming = false;
     this.netTick = 0;
@@ -1829,7 +1857,7 @@ class Game {
     if (m.type === "reconnecting" && this.mode === "online") {
       this.seatPending = false;
       this.state = "paused";
-      this.keys.clear();
+      this.clearKeys();
       this.firing = false;
       this.aiming = false;
       document.exitPointerLock();
@@ -1970,7 +1998,7 @@ class Game {
   }
   finish(win = false, winner = "") {
     this.state = win ? "complete" : "dead";
-    this.keys.clear();
+    this.clearKeys();
     this.firing = false;
     document.exitPointerLock();
     this.audio.tone(win ? 820 : 160, 0.4, "triangle", 0.2, win ? 1000 : 55);
@@ -2012,11 +2040,12 @@ class Game {
         Number(held("KeyD", "ArrowRight")) - Number(held("KeyA", "ArrowLeft")),
       sprint: held("ShiftLeft", "ShiftRight"),
       crouch: held("KeyC", "ControlLeft"),
-      jump: held("Space"),
+      jump: held("Space") || (this.vehicle < 0 && this.jumpQueued),
       grapple,
       reel: grapple,
       boost: held("KeyF"),
     };
+    this.jumpQueued = false;
     this.input = input;
     const action = this.player.action,
       hooks = this.player.hooks;

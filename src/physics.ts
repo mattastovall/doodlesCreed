@@ -1,3 +1,4 @@
+import { windowPassage } from "./window-vault.ts";
 import { PlayerRubble } from "./player-rubble.ts";
 import type { RubbleCluster } from "./county-wreckage.ts";
 import type { RubblePose } from "./county-rubble.ts";
@@ -129,6 +130,35 @@ export class Physics {
           )
             return false;
     return true;
+  }
+  windowAhead(pos: Vector3, dir: Vector3) {
+    if (!this.structureColliders.size) return;
+    const feet = pos.toArray() as V3,
+      heading = dir.toArray() as V3;
+    let nearest: { box: Box; target: V3; travel: number } | undefined;
+    for (
+      let x = Math.floor((pos.x - 1.7) / 16);
+      x <= Math.floor((pos.x + 1.7) / 16);
+      x++
+    )
+      for (
+        let z = Math.floor((pos.z - 1.7) / 16);
+        z <= Math.floor((pos.z + 1.7) / 16);
+        z++
+      )
+        for (const box of this.clearanceCells.get(x + "," + z) ?? []) {
+          const route = windowPassage(box, feet, heading);
+          if (!route || (nearest && nearest.travel <= route.travel)) continue;
+          const first = this.ray(
+            new Vector3(...route.origin),
+            dir,
+            route.travel + 0.06,
+          );
+          if (box.solid ? first?.box !== box : !!first) continue;
+          if (this.clear(new Vector3(...route.target), 1.12))
+            nearest = { box, ...route };
+        }
+    return nearest;
   }
   ray(o: Vector3, d: Vector3, max = 65) {
     this.refreshQueries();
@@ -317,6 +347,8 @@ export class Controller {
     start: Vector3;
     elapsed: number;
     duration: number;
+    pane?: Box;
+    wait?: number;
   } | null = null;
   private grappleWas = false;
   private jumpWas = false;
@@ -400,7 +432,27 @@ export class Controller {
     this.action = "RELEASE";
     this.actionTime = 0.6;
   }
+  onVaultGlass?: (box: Box) => void;
   private traverse(dir: Vector3) {
+    const passage = this.physics.windowAhead(this.position, dir);
+    if (passage && (!passage.box.solid || this.onVaultGlass)) {
+      this.height = 1.08;
+      this.mantle = {
+        target: new Vector3(...passage.target),
+        start: this.position.clone(),
+        elapsed: 0,
+        duration: 0.24,
+        pane: passage.box,
+        wait: 0,
+      };
+      this.velocity.addScaledVector(dir, 2.5);
+      this.velocity.y = 0;
+      this.grounded = false;
+      this.action = "VAULT";
+      this.actionTime = 0.24;
+      if (passage.box.solid) this.onVaultGlass!(passage.box);
+      return true;
+    }
     const origin = this.position.clone().add(new Vector3(0, 0.65, 0));
     const hit = this.physics.ray(origin, dir, 1.65);
     if (!hit) return false;
@@ -535,6 +587,17 @@ export class Controller {
     }
     if (this.mantle) {
       const m = this.mantle;
+      if (m.pane?.solid) {
+        // Keep the collider until the room confirms the break.
+        m.wait = (m.wait ?? 0) + dt;
+        if (m.wait >= 0.7) {
+          this.mantle = null;
+          this.actionTime = 0;
+          this.action = "AIR";
+        }
+        return;
+      }
+      if (m.pane && !m.elapsed) this.vaults++;
       m.elapsed += dt;
       const t = Math.min(1, m.elapsed / m.duration),
         u = Math.max(0, (t - 0.38) / 0.62);

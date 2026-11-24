@@ -27,7 +27,8 @@ export class CountyDebris {
   break(box: Box, eye: T.Vector3) {
     if (eye.distanceToSquared(this.pose.position.fromArray(box.p)) > 75 * 75)
       return;
-    for (let i = 0; i < 8; i++) {
+    const glass = box.kind === "window";
+    for (let i = 0; i < (glass ? 14 : 8); i++) {
       const s = this.slots[this.next++ % this.slots.length];
       s.age = 0;
       s.position.fromArray(box.p);
@@ -44,7 +45,7 @@ export class CountyDebris {
       s.size.set(
         0.08 + Math.random() * 0.22,
         0.05 + Math.random() * 0.12,
-        0.06 + Math.random() * 0.18,
+        glass ? 0.012 : 0.06 + Math.random() * 0.18,
       );
     }
   }
