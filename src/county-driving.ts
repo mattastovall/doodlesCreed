@@ -268,23 +268,25 @@ export class CountyDriveWorld {
       return false;
     }
     const distance = (previous + speed) * 0.5 * dt,
-      turn = (distance * Math.tan(state.steer)) / wheelbase;
+      steeredTurn = (distance * Math.tan(state.steer)) / wheelbase;
     // As the chassis rotates, the contact patches gradually redirect its momentum.
     // Locking the rear axle lets the velocity retain its old heading for longer.
     const oldSlip = state.slip ?? 0;
     // Countersteering catches a slide faster than waiting for the rear axle
     // to come back into line. Both paths keep the existing travel direction.
     const countersteering = side !== 0 && side * oldSlip > 0;
-    // A loaded rear tire regains lateral grip progressively on release. Use
-    // the existing slip and speed so replay can resume at any point in a drift.
+    // Once the rear breaks away it keeps swinging around the loaded front
+    // axle. This yaw moves the actual chassis and its swept collision hull.
     const driftLoad =
-      clamp((Math.abs(oldSlip) - 0.16) / 0.4, 0, 1) *
+      clamp((Math.abs(oldSlip) - 0.14) / 0.36, 0, 1) *
       clamp((speed - 5) / 10, 0, 1);
+    const freeSlide = slide || countersteering ? 0 : driftLoad;
+    const turn = steeredTurn + freeSlide * oldSlip * 1.25 * dt;
     const recovery = slide
       ? 0.95
       : countersteering
         ? 9.8
-        : 7.2 - 3.3 * driftLoad;
+        : 7.2 - 4.85 * freeSlide;
     const nextSlip = clamp(
       (oldSlip + turn) * Math.exp(-recovery * dt),
       -0.92,

@@ -173,7 +173,7 @@ test("handbrake rotates the chassis across its trajectory, replays mid-slide, an
   world.advance(server, "coupe", handbrake);
   const heading = Math.atan2(before[0] - drift.p[0], before[2] - drift.p[2]);
   assert.ok(Math.abs(heading - (drift.yaw - drift.slip!)) < 0.02);
-  for (let i = 0; i < 75; i++) {
+  for (let i = 0; i < 180; i++) {
     world.advance(drift, "coupe", w);
     world.advance(server, "coupe", w);
   }
@@ -219,9 +219,11 @@ test("lifting off tightens a fast grip corner and countersteering catches a hand
   assert.ok(Math.abs(lift.slip!) < 0.15 && lift.speed > 19);
   assert.ok(Math.abs(drift.slip!) > 0.5);
   const coast = structuredClone(drift);
-  for (let tick = 0; tick < 30; tick++)
+  for (let tick = 0; tick < 60; tick++)
     world.advance(coast, "coupe", driveInput(0, 0, false));
-  assert.ok(Math.abs(coast.slip!) > 0.19 && coast.speed > 18);
+  assert.ok(Math.abs(coast.slip!) > 0.35 && coast.speed > 18);
+  // A spectator sees the chassis rotate into the drift after controls release.
+  assert.ok(drift.yaw - coast.yaw > Math.PI / 12);
   const catchSlide = structuredClone(drift);
   for (let tick = 0; tick < 18; tick++) {
     world.advance(catchSlide, "coupe", driveInput(1, -1, false));
