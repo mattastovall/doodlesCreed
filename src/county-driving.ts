@@ -272,21 +272,25 @@ export class CountyDriveWorld {
     // As the chassis rotates, the contact patches gradually redirect its momentum.
     // Locking the rear axle lets the velocity retain its old heading for longer.
     const oldSlip = state.slip ?? 0;
-    // Countersteering catches a slide faster than waiting for the rear axle
-    // to come back into line. Both paths keep the existing travel direction.
-    const countersteering = side !== 0 && side * oldSlip > 0;
-    // Once the rear breaks away it keeps swinging around the loaded front
-    // axle. This yaw moves the actual chassis and its swept collision hull.
+    const slipAngle = Math.abs(oldSlip);
     const driftLoad =
-      clamp((Math.abs(oldSlip) - 0.14) / 0.36, 0, 1) *
-      clamp((speed - 5) / 10, 0, 1);
-    const freeSlide = slide || countersteering ? 0 : driftLoad;
-    const turn = steeredTurn + freeSlide * oldSlip * 1.25 * dt;
+      clamp((slipAngle - 0.14) / 0.18, 0, 1) * clamp((speed - 5) / 10, 0, 1);
+    // Unwinding the wheel starts restoring rear grip. The strongest catch
+    // requires actual opposite lock, so a brief correction trims the angle.
+    const oppositeLock = clamp(
+      (-Math.sign(oldSlip) * state.steer) / maxSteer,
+      0,
+      1,
+    );
+    const catchLock = Math.max(oppositeLock, side * oldSlip > 0 ? 0.45 : 0);
+    const carry = slide ? 0 : driftLoad * (1 - catchLock);
+    // Drive torque sustains shallow oversteer once rear grip has broken.
+    // The resulting yaw changes the body, collision hull and travel arc.
+    const powerYaw = throttle > 0 && !brake ? 0.47 * Math.sign(oldSlip) : 0;
+    const turn = steeredTurn + carry * (oldSlip * 1.25 + powerYaw) * dt;
     const recovery = slide
       ? 0.95
-      : countersteering
-        ? 9.8
-        : 7.2 - 4.85 * freeSlide;
+      : 7.2 - 4.85 * driftLoad + 3.2 * driftLoad * catchLock;
     const nextSlip = clamp(
       (oldSlip + turn) * Math.exp(-recovery * dt),
       -0.92,

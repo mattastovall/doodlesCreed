@@ -174,8 +174,8 @@ test("handbrake rotates the chassis across its trajectory, replays mid-slide, an
   const heading = Math.atan2(before[0] - drift.p[0], before[2] - drift.p[2]);
   assert.ok(Math.abs(heading - (drift.yaw - drift.slip!)) < 0.02);
   for (let i = 0; i < 180; i++) {
-    world.advance(drift, "coupe", w);
-    world.advance(server, "coupe", w);
+    world.advance(drift, "coupe", neutral);
+    world.advance(server, "coupe", neutral);
   }
   assert.deepEqual(server, drift);
   assert.ok(Math.abs(drift.slip!) < 0.02);
@@ -230,4 +230,31 @@ test("lifting off tightens a fast grip corner and countersteering catches a hand
     world.advance(drift, "coupe", w);
   }
   assert.ok(Math.abs(catchSlide.slip!) < Math.abs(drift.slip!) * 0.7);
+});
+
+test("brief corrections trim either slide, a longer catch straightens it and power can hold it", () => {
+  const world = new CountyDriveWorld([]);
+  for (const side of [-1, 1]) {
+    const entry = car(20);
+    for (let i = 0; i < 90; i++)
+      world.advance(entry, "coupe", driveInput(1, side, true));
+    const exit = (counterTicks: number, throttle: number, ticks = 60) => {
+      const pose = structuredClone(entry);
+      for (let i = 0; i < ticks; i++)
+        world.advance(
+          pose,
+          "coupe",
+          driveInput(throttle, i < counterTicks ? -side : 0, false),
+        );
+      return (-side * pose.slip! * 180) / Math.PI;
+    };
+    const brief = exit(6, 0);
+    const longer = exit(12, 0);
+    assert.ok(brief > longer && brief < 25 && longer > 15);
+    assert.ok(Math.abs(exit(30, 0)) < 5);
+    assert.ok(exit(0, 1) > exit(0, 0) + 7);
+    const poweredAngle = exit(0, 1, 240);
+    assert.ok(poweredAngle > 18 && poweredAngle < 32);
+    assert.ok(Math.abs(exit(0, 0, 240)) < 2);
+  }
 });
