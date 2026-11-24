@@ -218,6 +218,10 @@ test("lifting off tightens a fast grip corner and countersteering catches a hand
   assert.ok(Math.abs(lift.yaw) > Math.abs(power.yaw) * 1.35);
   assert.ok(Math.abs(lift.slip!) < 0.15 && lift.speed > 19);
   assert.ok(Math.abs(drift.slip!) > 0.5);
+  const coast = structuredClone(drift);
+  for (let tick = 0; tick < 30; tick++)
+    world.advance(coast, "coupe", driveInput(0, 0, false));
+  assert.ok(Math.abs(coast.slip!) > 0.19 && coast.speed > 18);
   const catchSlide = structuredClone(drift);
   for (let tick = 0; tick < 18; tick++) {
     world.advance(catchSlide, "coupe", driveInput(1, -1, false));
