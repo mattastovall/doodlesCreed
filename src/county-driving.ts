@@ -13,7 +13,15 @@ export interface DrivePose {
   yaw: number;
   speed: number;
   steer: number;
+  /** Signed angle between the chassis and its direction of travel. */
+  slip?: number;
 }
+export function tiresSkidding(pose: DrivePose, handbrake: boolean) {
+  return (
+    Math.abs(pose.speed) >= 4 && (handbrake || Math.abs(pose.slip ?? 0) >= 0.19)
+  );
+}
+
 export function driveInput(throttle: number, side: number, brake: boolean) {
   return throttle + 1 + 3 * (side + 1) + (brake ? 9 : 0);
 }
@@ -168,7 +176,13 @@ export class CountyDriveWorld {
     return false;
   }
 
-  private trafficBlocks(own: CountyCar, from: V3, to: V3, yaw: number) {
+  private trafficBlocks(
+    own: CountyCar,
+    from: V3,
+    to: V3,
+    fromYaw: number,
+    yaw: number,
+  ) {
     const [w, l, h] = dimensions[own.kind];
     for (const other of this.cars()) {
       if (
@@ -187,6 +201,7 @@ export class CountyDriveWorld {
       this.hull.halfSize.set(w, h / 2, l);
       this.hull.center.set(to[0], to[1] + h / 2, to[2]);
       if (!this.hull.intersectsOBB(this.trafficHull)) continue;
+      this.hull.rotation.setFromMatrix4(this.rotation.makeRotationY(fromYaw));
       this.hull.center.set(from[0], from[1] + h / 2, from[2]);
       if (!this.hull.intersectsOBB(this.trafficHull)) return true;
     }
@@ -213,11 +228,17 @@ export class CountyDriveWorld {
     const resistance = 0.18 + 0.00105 * magnitude * magnitude;
     const slowing = throttle * previous < 0;
     let speed: number;
+    const slide = brake && side !== 0 && previous > 5;
     if (brake || slowing || !throttle) {
       // Opposite throttle brakes to a complete stop before engaging reverse.
-      // Space holds the car at zero even with the accelerator down.
-      const deceleration = resistance + (brake ? 9.8 : slowing ? 8.2 : 0.35);
-      speed = Math.sign(previous) * Math.max(0, magnitude - deceleration * dt);
+      // With steering lock the rear tires slide while the front axle keeps pulling.
+      let braking = 0.35;
+      if (slide) braking = throttle > 0 ? 1.4 : 3.8;
+      else if (brake) braking = 9.8;
+      else if (slowing) braking = 8.2;
+      speed =
+        Math.sign(previous) *
+        Math.max(0, magnitude - (resistance + braking) * dt);
     } else {
       const top = throttle > 0 ? limit : 7;
       const thrust =
@@ -228,7 +249,7 @@ export class CountyDriveWorld {
     }
     // Full parking lock at low speed. Limit lateral acceleration as speed rises,
     // including while the wheel returns from a previously tight turn.
-    const grip = 8.6;
+    const grip = slide ? 23 : 8.6;
     const maxSteer = Math.atan(
       1 / Math.hypot(1 / Math.tan(lock), (speed * speed) / (wheelbase * grip)),
     );
@@ -242,17 +263,30 @@ export class CountyDriveWorld {
       maxSteer,
     );
     state.speed = speed;
-    if (!speed) return false;
+    if (!speed) {
+      state.slip = 0;
+      return false;
+    }
     const distance = (previous + speed) * 0.5 * dt,
       turn = (distance * Math.tan(state.steer)) / wheelbase;
-    const mid = state.yaw + turn / 2,
+    // As the chassis rotates, the contact patches gradually redirect its momentum.
+    // Locking the rear axle lets the velocity retain its old heading for longer.
+    const oldSlip = state.slip ?? 0;
+    const nextSlip = clamp(
+      (oldSlip + turn) * Math.exp(-(slide ? 0.85 : 6.5) * dt),
+      -0.92,
+      0.92,
+    );
+    const mid = state.yaw + (turn - oldSlip - nextSlip) / 2,
       s = Math.sin(mid),
       c = Math.cos(mid);
     const from = state.p,
       dx = -s * distance,
       dz = -c * distance;
     const to: V3 = [from[0] + dx, from[1], from[2] + dz];
-    return this.sweep(state, kind, to, state.yaw + turn, damage, own);
+    const impact = this.sweep(state, kind, to, state.yaw + turn, damage, own);
+    state.slip = state.speed ? nextSlip : 0;
+    return impact;
   }
 
   // Older clients report poses. Check a bounded path with the same hull, with
@@ -341,7 +375,7 @@ export class CountyDriveWorld {
       absC = Math.abs(c);
     const cx = from[0] + dx / 2,
       cz = from[2] + dz / 2;
-    if (own && this.trafficBlocks(own, from, to, yaw)) {
+    if (own && this.trafficBlocks(own, from, to, state.yaw, yaw)) {
       state.speed = 0;
       return false;
     }

@@ -86,6 +86,7 @@ export class Npcs {
       lastShot: Date.now(),
       deadAt: 0,
       shieldUntil: 0,
+      owned: [0],
       mags: [30, 8, 14],
       reloadUntil: 0,
       reloadWeapon: 0,

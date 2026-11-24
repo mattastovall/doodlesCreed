@@ -1,3 +1,10 @@
+import {
+  MAGAZINES,
+  newInventory,
+  PICKUP_RADIUS,
+  weaponPickups,
+} from "./weapon-pickups.ts";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { FISTS, PUNCHES, nextPunch, type Punch } from "./fists.ts";
 import { combatStep, shotDelay } from "./enemy-movement.ts";
 import { RELOAD_SECONDS } from "./weapon-balance.ts";
@@ -15,7 +22,7 @@ export const WEAPONS = [
   {
     name: "INKRIFLE",
     tag: "01 / AUTOMATIC",
-    mag: 30,
+    mag: MAGAZINES[0],
     interval: 0.11,
     damage: 25,
     pellets: 1,
@@ -25,7 +32,7 @@ export const WEAPONS = [
   {
     name: "SCATTERPEN",
     tag: "02 / SHOTGUN",
-    mag: 8,
+    mag: MAGAZINES[1],
     interval: 0.72,
     damage: 15,
     pellets: 8,
@@ -35,7 +42,7 @@ export const WEAPONS = [
   {
     name: "SIDE NOTE",
     tag: "03 / PISTOL",
-    mag: 14,
+    mag: MAGAZINES[2],
     interval: 0.25,
     damage: 38,
     pellets: 1,
@@ -45,7 +52,7 @@ export const WEAPONS = [
   {
     name: "LONGSHOT",
     tag: "04 / SNIPER",
-    mag: 5,
+    mag: MAGAZINES[3],
     interval: 1.25,
     damage: 90,
     pellets: 1,
@@ -55,7 +62,7 @@ export const WEAPONS = [
   {
     name: "FISTS",
     tag: "05 / MELEE",
-    mag: 0,
+    mag: MAGAZINES[4],
     interval: PUNCHES[0].duration,
     damage: PUNCHES[0].damage,
     pellets: 0,
@@ -99,8 +106,15 @@ export class Combat {
   hp = 100;
   kills = 0;
   score = 0;
-  weapon = 0;
-  mags = WEAPONS.map((g) => g.mag);
+  weapon = FISTS;
+  owned = [FISTS];
+  mags = newInventory().mags;
+  weaponDrops: {
+    weapon: number;
+    p: V3;
+    mesh: T.Mesh<T.BufferGeometry, T.MeshBasicMaterial>;
+  }[] = [];
+  onEquip: (weapon: number) => void = () => {};
   punch?: Punch;
   private punchClock = 0;
   private punchPending = false;
@@ -145,6 +159,29 @@ export class Combat {
     for (const [a, b] of city.links) {
       this.adjacency[a].push(b);
       this.adjacency[b].push(a);
+    }
+    for (const drop of weaponPickups(city)) {
+      const long = drop.weapon !== 2;
+      const barrel = new T.BoxGeometry(long ? 1.25 : 0.52, 0.13, 0.13);
+      const grip = new T.BoxGeometry(0.14, 0.3, 0.13)
+        .rotateZ(-0.2)
+        .translate(long ? -0.25 : -0.14, -0.15, 0);
+      const base = new T.CylinderGeometry(0.56, 0.62, 0.09, 12).translate(
+        0,
+        -0.52,
+        0,
+      );
+      const parts = [barrel, grip, base];
+      if (drop.weapon === 3)
+        parts.push(new T.BoxGeometry(0.38, 0.1, 0.1).translate(0, 0.13, 0));
+      const mesh = new T.Mesh(
+        mergeGeometries(parts),
+        new T.MeshBasicMaterial({ color: GOLD }),
+      );
+      parts.forEach((part) => part.dispose());
+      mesh.position.set(drop.p[0], drop.p[1] + 0.82, drop.p[2]);
+      scene.add(mesh);
+      this.weaponDrops.push({ ...drop, mesh });
     }
     if (spawnBots) {
       this.waveEnabled = true;
@@ -229,11 +266,21 @@ export class Combat {
     });
     return true;
   }
+  collectWeapon(i: number) {
+    if (!Number.isInteger(i) || i < 0 || i >= FISTS || this.owned.includes(i))
+      return;
+    this.owned.push(i);
+    this.mags[i] = MAGAZINES[i];
+    this.switchWeapon(i);
+    this.onEquip(i);
+    this.audio.collect();
+    this.onNotice(WEAPONS[i].name + " PICKED UP");
+  }
   switchWeapon(i: number) {
     if (
       !Number.isInteger(i) ||
       i < 0 ||
-      i >= WEAPONS.length ||
+      !this.owned.includes(i) ||
       i === this.weapon
     )
       return false;
@@ -471,7 +518,7 @@ export class Combat {
     }
     return [];
   }
-  update(dt: number, time: number, camera: T.Camera) {
+  update(dt: number, time: number, camera: T.Camera, onFoot = true) {
     this.punchClock += dt * 1000;
     if (
       this.punchPending &&
@@ -740,6 +787,15 @@ export class Combat {
         this.flashes.splice(i, 1);
       }
     }
+    const position = this.player.position.toArray() as V3;
+    for (const drop of this.weaponDrops) {
+      const d = distance(position, drop.p);
+      drop.mesh.visible = !this.owned.includes(drop.weapon) && d < 100;
+      if (!drop.mesh.visible) continue;
+      drop.mesh.rotation.y = time;
+      if (!this.online && onFoot && this.hp > 0 && d <= PICKUP_RADIUS)
+        this.collectWeapon(drop.weapon);
+    }
     for (const item of this.pickups)
       if (item.active) {
         item.mesh.rotation.y = time;
@@ -767,6 +823,11 @@ export class Combat {
       m.geometry.dispose();
       (m.material as T.Material).dispose();
     }
+    this.weaponDrops.forEach(({ mesh }) => {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+    });
     this.pickups.forEach((p) => disposeGroup(p.mesh));
   }
 }

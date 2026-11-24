@@ -153,3 +153,40 @@ test("fleet launch, coasting, service brake and reverse use distinct responses",
   assert.ok(run("coupe", 10, reverse, 60) > 0);
   assert.ok(run("coupe", 0, reverse, 240) < -4);
 });
+
+test("handbrake rotates the chassis across its trajectory, replays mid-slide, and recovers grip", () => {
+  const world = new CountyDriveWorld([]);
+  const drift = car(20),
+    corner = car(20);
+  const handbrake = driveInput(1, 1, true);
+  for (let i = 0; i < 100; i++) {
+    world.advance(drift, "coupe", handbrake);
+    world.advance(corner, "coupe", driveInput(1, 1, false));
+  }
+  assert.ok(drift.speed > 17);
+  assert.ok(Math.abs(drift.slip!) > 0.5 && Math.abs(corner.slip!) < 0.1);
+  assert.ok(Math.abs(drift.yaw) > Math.abs(corner.yaw) * 2);
+  const server: DrivePose = JSON.parse(JSON.stringify(drift));
+  const before = [...drift.p];
+  world.advance(drift, "coupe", handbrake);
+  world.advance(server, "coupe", handbrake);
+  const heading = Math.atan2(before[0] - drift.p[0], before[2] - drift.p[2]);
+  assert.ok(Math.abs(heading - (drift.yaw - drift.slip!)) < 0.02);
+  for (let i = 0; i < 75; i++) {
+    world.advance(drift, "coupe", w);
+    world.advance(server, "coupe", w);
+  }
+  assert.deepEqual(server, drift);
+  assert.ok(Math.abs(drift.slip!) < 0.02);
+});
+
+test("sideways momentum collides with a wall beside the chassis", () => {
+  const wall = block([-318.45, 1, 0], [0.1, 2, 12]);
+  const world = new CountyDriveWorld([wall]);
+  const pose = car(15);
+  pose.slip = 0.85;
+  for (let i = 0; i < 20; i++) world.advance(pose, "coupe", neutral);
+  assert.equal(pose.speed, 0);
+  assert.equal(pose.slip, 0);
+  assert.ok(pose.p[0] < -319.45);
+});

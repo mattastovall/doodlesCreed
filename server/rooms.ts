@@ -1,4 +1,10 @@
 import {
+  advanceSeatAction,
+  besideCar,
+  canReachCar,
+  startSeatAction,
+} from "../src/county-car-access.ts";
+import {
   CountyShops,
   cleanRecord,
   wanted,
@@ -19,6 +25,7 @@ import {
   CountyDriveWorld,
   DRIVE_DT,
   type DrivePose,
+  tiresSkidding,
 } from "../src/county-driving.ts";
 import { CountyCitizens, type CountyCitizen } from "../src/county-citizens.ts";
 import {
@@ -35,6 +42,13 @@ import { CountyStructures } from "../src/county-structures.ts";
 import { COUNTY, countyCars, type CountyCar } from "../src/county.ts";
 import { insideRust, RUST_SCALE } from "../src/rust-boundary.ts";
 import { peekEye, validatedLean } from "../src/cover-peek.ts";
+import {
+  MAGAZINES,
+  newInventory,
+  PICKUP_RADIUS,
+  weaponPickups,
+  type WeaponPickup,
+} from "../src/weapon-pickups.ts";
 import { RELOAD_SECONDS } from "../src/weapon-balance.ts";
 import { actorHit, HIT_MULTIPLIER, type HitRegion } from "../src/actor-hit.ts";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -54,6 +68,7 @@ export interface PlayerState {
   kills: number;
   deaths: number;
   weapon: number;
+  owned: number[];
   height: number;
   anchor: V3 | null;
   lastMove: number;
@@ -91,6 +106,7 @@ export interface ReserveRequest {
   roomCode?: string;
 }
 interface Room {
+  weaponDrops: WeaponPickup[];
   citizens?: CountyCitizens;
   shops?: CountyShops;
   incidents?: CountyImpacts;
@@ -130,12 +146,73 @@ export class Rooms {
     PlayerState,
     {
       pose: DrivePose;
+      skiddingCar?: number;
       seq: number;
       credit: number;
       last: number;
       crashUntil: number;
     }
   >();
+  private modernSeat = new WeakSet<PlayerState>();
+  private takeWheel(r: Room, p: PlayerState, car: CountyCar) {
+    p.punchPending = false;
+    r.wreckage?.prepare();
+    this.drivers.delete(p);
+    if (this.modernSeat.has(p))
+      this.drivers.set(p, {
+        pose: { p: [...car.p], yaw: car.yaw, speed: 0, steer: 0 },
+        seq: 0,
+        credit: 0.05,
+        last: performance.now(),
+        crashUntil: 0,
+      });
+    p.p = [...car.p];
+    p.yaw = car.yaw;
+    p.pitch = 0;
+  }
+  private advanceSeats(r: Room, now: number) {
+    r.cars?.forEach((car, index) => {
+      const work = car.interaction;
+      if (!work) return;
+      const pair = [...r.players].find(
+        ([, player]) => player.id === work.actor,
+      );
+      const eligible =
+        !!pair &&
+        pair[0].readyState === WebSocket.OPEN &&
+        pair[1].hp > 0 &&
+        canReachCar(car, pair[1].p) &&
+        !r.cars!.some((other) => other.driver === work.actor);
+      const result = advanceSeatAction(car, eligible, now);
+      if (!result) return;
+      if (result === "hijack" && work.occupant) {
+        r.citizens?.ejectDriver(work.occupant);
+        const displaced = [...r.players].find(
+          ([, player]) => player.id === work.occupant,
+        );
+        if (displaced) {
+          const [socket, driver] = displaced;
+          this.drivers.delete(driver);
+          const landing = besideCar(car);
+          driver.p = r.spatial.clear(landing, driver.height)
+            ? landing
+            : [...car.p];
+          send(socket, { type: "vehicle-seat", index, car, ejected: driver.p });
+        }
+      }
+      if (pair) {
+        const [socket, actor] = pair;
+        if (car.driver === actor.id) this.takeWheel(r, actor, car);
+        send(socket, {
+          type: "vehicle-seat",
+          index,
+          car,
+          result,
+          driveVersion: this.drivers.has(actor) ? 1 : undefined,
+        });
+      }
+    });
+  }
   private drive(
     ws: WebSocket,
     r: Room,
@@ -190,6 +267,7 @@ export class Rooms {
         (box, amount) => r.structures!.damage(box.pieceId!, amount),
         car,
       );
+      driver.skiddingCar = tiresSkidding(pose, input >= 9) ? index : undefined;
       if (impact) {
         if (now >= driver.crashUntil) this.countyVandalism(p);
         driver.crashUntil = now + 400;
@@ -362,6 +440,7 @@ export class Rooms {
           ? new Npcs(city, spatial)
           : null;
       room = {
+        weaponDrops: weaponPickups(city),
         cars: seed === COUNTY ? countyCars() : undefined,
         roomId: randomUUID(),
         code,
@@ -451,7 +530,8 @@ export class Rooms {
   private initializeStructures(room: Room) {
     if (room.seed !== COUNTY) return;
     if (room.duel) {
-      for (const car of room.cars!) car.driver = null;
+      // Duel rooms have the parked fleet and no civilian traffic.
+      room.cars = room.cars!.filter((car) => !car.driver);
     } else {
       room.shops = new CountyShops(room.city.boxes);
       room.citizens = new CountyCitizens(room.city, room.cars!, room.spatial);
@@ -622,6 +702,7 @@ export class Rooms {
         });
         r.rubbleUpdates.clear();
       }
+      this.advanceSeats(r, now);
       const humans = [...r.players.values()];
       const npcRosterBefore = r.npcs.map((p) => p.id).join(",");
       if (r.citizens) {
@@ -764,7 +845,7 @@ export class Rooms {
           }
         }
         if (p.reloadUntil && now >= p.reloadUntil) {
-          p.mags[p.reloadWeapon] = [30, 8, 14, 5][p.reloadWeapon];
+          p.mags[p.reloadWeapon] = MAGAZINES[p.reloadWeapon];
           p.reloadUntil = 0;
           send(ws, { type: "ammo", mags: p.mags, reloadRemaining: 0 });
         }
@@ -798,6 +879,7 @@ export class Rooms {
               : undefined,
           height: p.height,
           lean: p.lean ?? 0,
+          skiddingCar: this.drivers.get(p)?.skiddingCar,
           anchor: p.anchor,
           npc: !!p.npc,
           notoriety: p.notoriety,
@@ -950,11 +1032,19 @@ export class Rooms {
             p.anchor,
             p.lean ?? 0,
             p.engaged ? 1 : 0,
-            ...(r.citizens || p.swing || p.reaction
+            ...(r.citizens ||
+            p.swing ||
+            p.reaction ||
+            p.skiddingCar !== undefined
               ? [p.notoriety ?? 0, p.action ?? null, p.fall ?? null]
               : []),
-            ...(p.swing || p.reaction ? [p.swing ?? null] : []),
-            ...(p.reaction ? [p.reaction] : []),
+            ...(p.swing || p.reaction || p.skiddingCar !== undefined
+              ? [p.swing ?? null]
+              : []),
+            ...(p.reaction || p.skiddingCar !== undefined
+              ? [p.reaction ?? null]
+              : []),
+            ...(p.skiddingCar === undefined ? [] : [p.skiddingCar]),
           ]),
         });
         ws.send(compact);
@@ -1091,6 +1181,7 @@ export class Rooms {
             ? new Npcs(city, spatial)
             : null;
         r = {
+          weaponDrops: weaponPickups(city),
           cars: seed === COUNTY ? countyCars() : undefined,
           roomId: randomUUID(),
           code,
@@ -1139,7 +1230,7 @@ export class Rooms {
         hp: 100,
         kills: 0,
         deaths: 0,
-        weapon: 0,
+        ...newInventory(),
         height: 1.76,
         anchor: null,
         lastMove: Date.now(),
@@ -1149,7 +1240,6 @@ export class Rooms {
         notoriety: r.citizens ? 0 : undefined,
         crime: r.shops ? cleanRecord() : undefined,
         shieldUntil: m.compact === true ? Infinity : Date.now() + 3000,
-        mags: [30, 8, 14, 5],
         reloadUntil: 0,
         reloadWeapon: 0,
         moveCredit: 3,
@@ -1248,38 +1338,43 @@ export class Rooms {
     if (m.type === "vehicle" && r.cars) {
       const car = Number.isInteger(m.index) ? r.cars[m.index] : undefined;
       const action = m.action ?? (vehicle ? "exit" : "enter");
+      let result;
       if (car && p.hp > 0) {
         if (action === "exit" && vehicle === car) {
           car.driver = null;
           this.drivers.delete(p);
         }
         if (
-          action === "enter" &&
+          action === "confirm" &&
           !vehicle &&
-          !car.driver &&
-          distance(car.p, p.p) < 5
+          car.interaction?.actor === p.id &&
+          car.interaction.started === m.started &&
+          car.interaction.action !== "hijack"
         ) {
-          p.punchPending = false;
-          car.driver = p.id;
-          r.wreckage?.prepare();
-          this.drivers.delete(p);
-          if (m.driveVersion === 1)
-            this.drivers.set(p, {
-              pose: { p: [...car.p], yaw: car.yaw, speed: 0, steer: 0 },
-              seq: 0,
-              credit: 0.05,
-              last: performance.now(),
-              crashUntil: 0,
-            });
-          p.p = [...car.p];
-          p.yaw = car.yaw;
-          p.pitch = 0;
+          result = advanceSeatAction(
+            car,
+            canReachCar(car, p.p),
+            Date.now(),
+            true,
+          );
+          if (car.driver === p.id) this.takeWheel(r, p, car);
+        }
+        if (
+          !vehicle &&
+          canReachCar(car, p.p) &&
+          !r.cars.some((other) => other.interaction?.actor === p.id) &&
+          startSeatAction(car, p.id, action, Date.now())
+        ) {
+          if (m.driveVersion === 1) this.modernSeat.add(p);
+          else this.modernSeat.delete(p);
+          if (car.driver === p.id) this.takeWheel(r, p, car);
         }
       }
       send(ws, {
         type: "vehicle-seat",
         driveVersion: this.drivers.has(p) ? 1 : undefined,
         index: m.index,
+        result,
         car: car ?? null,
       });
       return;
@@ -1293,6 +1388,7 @@ export class Rooms {
         (vehicle ? r.cars[m.vehicle] !== vehicle : (m.vehicle ?? -1) !== -1)
       )
         return;
+      if (vehicle?.interaction?.action === "hijack") return;
       if (vehicle && this.drivers.has(p)) {
         this.drive(ws, r, p, vehicle, m.vehicle, m.drive);
         return;
@@ -1336,7 +1432,20 @@ export class Rooms {
       }
       p.yaw = m.yaw;
       p.pitch = Math.max(-1.5, Math.min(1.5, m.pitch));
-      const nextWeapon = [0, 1, 2, 3, FISTS].includes(m.weapon) ? m.weapon : 0;
+      let nextWeapon = p.owned.includes(m.weapon) ? m.weapon : p.weapon;
+      if (!vehicle && ws.bufferedAmount < 32768) {
+        const drop = r.weaponDrops.find(
+          (site) =>
+            !p.owned.includes(site.weapon) &&
+            distance(site.p, p.p) <= PICKUP_RADIUS,
+        );
+        if (drop) {
+          p.owned.push(drop.weapon);
+          p.mags[drop.weapon] = MAGAZINES[drop.weapon];
+          nextWeapon = drop.weapon;
+          send(ws, { type: "weapon-pickup", weapon: drop.weapon });
+        }
+      }
       if (nextWeapon !== p.weapon) {
         p.reloadUntil = 0;
         p.swing = undefined;
@@ -1365,7 +1474,7 @@ export class Rooms {
       p.weapon !== FISTS &&
       p.hp > 0 &&
       !p.reloadUntil &&
-      p.mags[p.weapon] < [30, 8, 14, 5][p.weapon]
+      p.mags[p.weapon] < MAGAZINES[p.weapon]
     ) {
       p.reloadWeapon = p.weapon;
       p.reloadUntil = Date.now() + RELOAD_SECONDS[p.weapon] * 1000;
@@ -1393,7 +1502,7 @@ export class Rooms {
         endPursuit(p.crime, false);
         send(ws, { type: "crime", record: p.crime });
       }
-      p.mags = [30, 8, 14, 5];
+      Object.assign(p, newInventory());
       p.reloadUntil = 0;
       p.moveCredit = 3;
       p.shieldUntil = Date.now() + 2500;

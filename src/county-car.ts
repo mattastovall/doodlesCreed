@@ -1,4 +1,5 @@
 import * as T from "three";
+import { makeCockpitInstaller } from "./county-cockpit.ts";
 import { VEHICLE_DIMENSIONS } from "./county-vehicle-dimensions.ts";
 import { coastSun, skyUV } from "./county-atmosphere.ts";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -30,6 +31,41 @@ function seatedMotorist() {
         .translate(0, -0.31, 0.025),
       0x39867e,
     ],
+    ...[-1, 1].flatMap(
+      (side) =>
+        [
+          [
+            new T.BoxGeometry(0.105, 0.22, 0.13)
+              .rotateX(0.48)
+              .translate(side * 0.19, -0.32, -0.035),
+            0x39867e,
+          ],
+          [
+            new T.BoxGeometry(0.095, 0.1, 0.21).translate(
+              side * 0.18,
+              -0.402,
+              -0.14,
+            ),
+            0xf5efdf,
+          ],
+          [
+            new T.BoxGeometry(0.14, 0.14, 0.32).translate(
+              side * 0.09,
+              -0.51,
+              -0.08,
+            ),
+            0x303d51,
+          ],
+          [
+            new T.BoxGeometry(0.13, 0.27, 0.12).translate(
+              side * 0.09,
+              -0.66,
+              -0.185,
+            ),
+            0x303d51,
+          ],
+        ] as const,
+    ),
     [
       new T.SphereGeometry(1, 9, 6)
         .scale(0.145, 0.172, 0.14)
@@ -90,8 +126,13 @@ export async function loadFleet(sky: T.Texture) {
       float lit=dot(N,sun), fresnel=pow(1.-max(0.,dot(N,V)),3.);
       vec3 sky=texture2D(panorama,skyUV(R)).rgb;
       vec3 body=tint*mix(vec3(.49,.58,.73),vec3(1.08,.97,.83),smoothstep(-.20,.38,lit));
+      // Upholstery and hard trim retain their cool ink-and-paper palette.
+      float up=.53*N.y+.47*lit;
+      vec3 trim=tint*mix(vec3(.49,.63,.83),vec3(.92,1.,1.11),smoothstep(-.24,-.20,up));
+      trim=mix(trim,tint*vec3(1.28,1.36,1.41),smoothstep(.48,.53,up));
+      body=mix(trim,body,enamel);
       vec3 coat=mix(body,sky,enamel*(.10+.45*fresnel));
-      coat+=vec3(1.,.82,.59)*pow(max(0.,dot(R,sun)),55.)*(.12+.6*enamel);
+      coat+=vec3(1.,.82,.59)*pow(max(0.,dot(R,sun)),55.)*(.72*enamel);
       gl_FragColor=vec4(coat,1.);
       #include <colorspace_fragment>
     }`,
@@ -118,29 +159,7 @@ export async function loadFleet(sky: T.Texture) {
     return material;
   });
   paint.dispose();
-  const instruments = panel(256, 88, (ctx) => {
-    ctx.fillStyle = "#293955";
-    ctx.fillRect(0, 0, 256, 88);
-    for (const cx of [70, 186]) {
-      for (let j = 0; j <= 12; j++) {
-        const a = (0.78 + j * 0.12) * Math.PI;
-        ctx.strokeStyle = "#e4ebf1";
-        ctx.lineWidth = j % 3 === 0 ? 4 : 2;
-        ctx.beginPath();
-        ctx.moveTo(cx + 32 * Math.cos(a), 54 + 32 * Math.sin(a));
-        ctx.lineTo(cx + 41 * Math.cos(a), 54 + 41 * Math.sin(a));
-        ctx.stroke();
-      }
-    }
-    ctx.fillStyle = "#b4c8de";
-    ctx.font = "10px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("km/h", 70, 76);
-    ctx.fillText("RPM", 186, 76);
-  });
-  const dial = new T.PlaneGeometry(0.33, 0.114),
-    needleGeo = new T.PlaneGeometry(0.004, 0.041).translate(0, 0.019, 0);
-  const needleMat = new T.MeshBasicMaterial({ color: 0xd7e9ff });
+  const installCockpit = makeCockpitInstaller();
   const taxiLabel = panel(192, 54, (ctx) => {
     ctx.fillStyle = "#e6edf2";
     ctx.fillRect(0, 0, 192, 54);
@@ -159,18 +178,7 @@ export async function loadFleet(sky: T.Texture) {
         if (o instanceof T.Mesh)
           o.material = o.name.includes("_glass_") ? glass : paints[0];
       });
-      const dash = new T.Mesh(dial, instruments),
-        wheel = scene.getObjectByName("near_steering")!;
-      dash.position.copy(wheel.position);
-      dash.position.z -= 0.115;
-      dash.position.y += 0.103;
-      scene.getObjectByName("near")!.add(dash);
-      for (const [i, x] of [-0.075, 0.075].entries()) {
-        const needle = new T.Mesh(needleGeo, needleMat);
-        needle.name = "dial" + i;
-        needle.position.set(x, -0.012, 0.001);
-        dash.add(needle);
-      }
+      installCockpit(scene, kind);
       if (kind === "taxi") {
         const [lo, hi] = scene.userData.taxiSign;
         const geo = new T.PlaneGeometry(
@@ -249,6 +257,7 @@ export class CountyCarModel extends T.Group {
   private hinges: T.Object3D[];
   private levels: T.Object3D[];
   private previous: string | null | undefined;
+  private wasHijacking = false;
   private elapsed = 1;
   private lastTime = 0;
   private lastPosition = new T.Vector3();
@@ -290,6 +299,8 @@ export class CountyCarModel extends T.Group {
     steer = 0,
     responding = false,
     reduced = false,
+    hijack?: number,
+    cockpit = false,
   ) {
     for (const [i, light] of this.beacons.entries()) {
       const bright =
@@ -303,7 +314,8 @@ export class CountyCarModel extends T.Group {
       : 0;
     this.elapsed += dt;
     if (this.previous !== undefined && driver !== this.previous)
-      this.elapsed = 0;
+      this.elapsed = this.wasHijacking ? 0.55 : 0;
+    this.wasHijacking = hijack !== undefined;
     let speed = 0;
     if (driver && this.previous === driver) {
       const dx = this.position.x - this.lastPosition.x,
@@ -315,7 +327,7 @@ export class CountyCarModel extends T.Group {
     }
     this.needles.forEach(
       (n, i) =>
-        (n.rotation.z = 2.18 - Math.min(1, speed / (i ? 43 : 50)) * 4.36),
+        (n.rotation.z = 2.18 - Math.min(1, speed / (i ? 43 : 44.704)) * 4.36),
     );
     this.lastPosition.copy(this.position);
     this.lastTime = now;
@@ -331,12 +343,23 @@ export class CountyCarModel extends T.Group {
     const t = Math.min(1, this.elapsed / 0.98);
     // Swing out, pause for the runner, then close at the front hinge.
     const openness =
-      t < 0.36
-        ? T.MathUtils.smoothstep(t, 0, 0.36)
-        : 1 - T.MathUtils.smoothstep(t, 0.55, 1);
+      hijack !== undefined
+        ? T.MathUtils.smoothstep(hijack, 0, 0.32)
+        : t < 0.36
+          ? T.MathUtils.smoothstep(t, 0, 0.36)
+          : 1 - T.MathUtils.smoothstep(t, 0.55, 1);
     const level = distance < 10 ? 0 : distance < 35 ? 1 : 2;
     this.motorist.visible =
-      level === 0 && !!driver?.startsWith("civilian-driver-");
+      level === 0 && !!driver && (!cockpit || hijack !== undefined);
+    if (level === 0) {
+      const slide =
+        hijack === undefined ? 0 : T.MathUtils.smoothstep(hijack, 0.26, 0.85);
+      this.motorist.position.copy(this.seat);
+      this.motorist.position.x += slide * this.doorSide * 1.68;
+      this.motorist.position.y +=
+        Math.sin(slide * Math.PI) * 0.19 - slide * 0.38;
+      this.motorist.rotation.z = slide * this.doorSide * -0.62;
+    }
     this.levels.forEach((o, i) => {
       o.visible = i === level;
       this.hinges[i].rotation.y = this.doorSide * 1.12 * openness;

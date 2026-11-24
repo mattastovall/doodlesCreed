@@ -66,6 +66,8 @@ test("server ammunition, reload time and movement budget cannot be bypassed by p
     const wa = await until(() => a.messages.find((m) => m.type === "welcome"));
     const room = rooms.rooms.get(wa.code)!;
     const p = [...room.players.values()][0];
+    p.owned.push(0);
+    p.weapon = 0;
     p.mags[0] = 1;
     p.lastShot = 0;
     rooms.handle(a.ws, { type: "fire" }); // real membership socket is server side below
@@ -154,6 +156,9 @@ test("server NPCs attack real players and stay defeated until wave clear", async
     human.yaw = 0;
     human.pitch = 0;
     human.hp = 100;
+    human.owned.push(0);
+    human.weapon = 0;
+    human.mags[0] = 30;
     human.lastShot = 0;
     bot.shieldUntil = 0;
     bot.hp = 1;
@@ -210,6 +215,9 @@ test("loading clients cannot fight until their first valid state, and reload com
     );
     const room = rooms.rooms.get(welcome.code)!;
     const [ws, p] = [...room.players.entries()][0];
+    p.owned.push(0);
+    p.weapon = 0;
+    p.mags[0] = 30;
     assert.equal(p.ready, false);
     rooms.handle(ws, { type: "fire" });
     assert.equal(p.mags[0], 30);
@@ -338,6 +346,7 @@ test("boarding keeps the parked pose across late walking packets and old driving
       [socket, runner] = [...room.players][0],
       car = room.cars![0],
       parked = [...car.p];
+    car.access = "open"; // This fixture exercises driving after access has been earned.
     const facing = car.yaw + 1.8,
       heading = car.yaw;
     runner.moveCredit = 6;

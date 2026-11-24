@@ -24,6 +24,7 @@ try {
     await page.evaluate((weapon) => {
       const g = window.__doodles;
       g.state = "play";
+      g.combat.collectWeapon(weapon);
       g.setWeapon(weapon);
       g.combat.mags[weapon] = 1;
       g.player.yaw = 0;

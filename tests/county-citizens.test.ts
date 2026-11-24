@@ -207,7 +207,7 @@ test("a driver cuts in front of a notorious motorist while ordinary traffic stay
   assert.ok(trajectory(31) > 1);
 });
 
-test("civilian motorists share a seated mesh, visible only in their occupied near-detail cars", async () => {
+test("nearby civilian and human drivers share a seated mesh that moves through the door during hijacking", async () => {
   const { CountyCarModel } = await import("../src/county-car.ts");
   const { Group, Mesh, MeshBasicMaterial } = await import("three");
   const template = new Group(),
@@ -246,9 +246,16 @@ test("civilian motorists share a seated mesh, visible only in their occupied nea
   a.update("civilian-driver-0", 2, 12);
   assert.equal(seated.visible, false);
   a.update("human", 3, 2);
-  assert.equal(seated.visible, false);
+  assert.ok(seated.visible, "an approaching player can see the occupied seat");
+  a.update("human", 3.1, 2, 0, false, false, undefined, true);
+  assert.equal(seated.visible, false, "keep the driver's cockpit view clear");
+  a.update("human", 3.5, 2, 0, false, false, 0.8, true);
+  assert.ok(seated.visible);
+  assert.ok(seated.position.x < template.userData.seat[0] - 1.5);
+  assert.ok(Math.abs(a.getObjectByName("near_door")!.rotation.y) > 1);
   a.update("civilian-driver-0", 4, 2);
   assert.ok(seated.visible);
+  assert.deepEqual(seated.position.toArray(), template.userData.seat);
   a.update(null, 5, 2);
   assert.equal(seated.visible, false);
   coat.dispose();

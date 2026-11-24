@@ -15,6 +15,8 @@ test("County drivers advance only from timed, owned input; a real crash is broad
   const ws = new WebSocket(
     "ws://127.0.0.1:" + (wss.address() as { port: number }).port,
   );
+  let observer: WebSocket | undefined;
+  const observed: any[] = [];
   const messages: any[] = [];
   ws.on("message", (raw) => messages.push(JSON.parse(String(raw))));
   try {
@@ -28,6 +30,13 @@ test("County drivers advance only from timed, owned input; a real crash is broad
     const r = [...rooms.rooms.values()][0],
       [socket, p] = [...r.players][0],
       car = r.cars![0];
+    observer = new WebSocket(ws.url);
+    observer.on("message", (raw) => observed.push(JSON.parse(String(raw))));
+    await once(observer, "open");
+    observer.send(
+      JSON.stringify({ type: "join", code: r.code, compact: true }),
+    );
+    car.access = "open"; // This fixture exercises driving after access has been earned.
     const f = r.city.boxes.find(
       (b) => b.kind === "foundation" && b.buildingId?.endsWith("/kiosk"),
     )!;
@@ -81,14 +90,46 @@ test("County drivers advance only from timed, owned input; a real crash is broad
       i++
     ) {
       await delay(35);
+      // A brief straight handbrake pull is visible to observers even without steering.
+      const code = i >= 40 && i < 44 ? driveInput(1, 0, true) : input;
       rooms.handle(socket, {
         ...state,
-        drive: { seq, inputs: [input, input, input, input] },
+        drive: { seq, inputs: [code, code, code, code] },
       });
       seq += 4;
     }
     await delay(50);
     assert.ok(messages.some((m) => m.type === "vehicle-drive" && m.seq >= 13));
+    const roster = observed.filter((m) => m.type === "roster").at(-1);
+    const actorIndex = roster.actors.findIndex(
+      (actor: any) => actor.id === p.id,
+    );
+    assert.ok(actorIndex >= 0);
+    assert.ok(
+      observed.some(
+        (m) => m.type === "snapshot" && m.actors[actorIndex]?.[18] === 0,
+      ),
+    );
+    const snapshots = messages.filter((m) => m.type === "snapshot");
+    assert.ok(
+      snapshots.some((m) =>
+        m.players.some(
+          (actor: any) => actor.id === p.id && actor.skiddingCar === 0,
+        ),
+      ),
+    );
+    assert.ok(
+      snapshots.every((m) =>
+        m.players.every(
+          (actor: any) => !actor.npc || actor.skiddingCar === undefined,
+        ),
+      ),
+    );
+    assert.equal(
+      snapshots.at(-1).players.find((actor: any) => actor.id === p.id)
+        .skiddingCar,
+      undefined,
+    );
     assert.ok(
       messages.some(
         (m) =>
@@ -108,6 +149,7 @@ test("County drivers advance only from timed, owned input; a real crash is broad
     rooms.handle(socket, { ...state, drive: { seq, inputs: [input] } });
     assert.deepEqual(car.p, parked);
   } finally {
+    observer?.close();
     ws.close();
     rooms.dispose();
     wss.close();

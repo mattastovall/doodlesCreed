@@ -1,3 +1,11 @@
+import {
+  ACCESS_WINDOW,
+  ACCESS_MS,
+  advanceSeatAction,
+  canReachCar,
+  seatAction,
+  startSeatAction,
+} from "./county-car-access.ts";
 import { CountyShops, cleanRecord, wanted } from "./county-crime.ts";
 import {
   FISTS,
@@ -24,20 +32,23 @@ import {
   CountyDriveWorld,
   driveInput,
   type DrivePose,
+  tiresSkidding,
 } from "./county-driving.ts";
 import { RELEASE_ID } from "./release-info.ts";
 import { RubbleView } from "./county-rubble-view.ts";
 import { CountyWreckage, type RubbleMessage } from "./county-wreckage.ts";
+import { CountyTires } from "./county-tires.ts";
 import { CountyDebris } from "./county-debris.ts";
 import { CountyStructures } from "./county-structures.ts";
 import { COUNTY, countyLadders, countyCars, type CountyCar } from "./county.ts";
 import { CoverPeek, peekEye, validatedLean } from "./cover-peek.ts";
+import { newInventory } from "./weapon-pickups.ts";
 import { WeaponClearance } from "./weapon-clearance.ts";
 /// <reference types="vite/client" />
 import { generateLevel } from "./levels.ts";
 import "./style.css";
 import * as T from "three";
-import { type City, type V3 } from "./world.ts";
+import { distance, type City, type V3 } from "./world.ts";
 import { Controller, Physics, idleInput } from "./physics.ts";
 import { Renderer, INK, GOLD, stroke, disposeGroup } from "./render.ts";
 import { buildWeapon, Doodle } from "./actors.ts";
@@ -233,6 +244,8 @@ class Game {
   vehicle = -1;
   carSpeed = 0;
   private carSteer = 0;
+  private carSlip = 0;
+  private carSkidding = false;
   private driveWorld?: CountyDriveWorld;
   private crashUntil = 0;
   private driveAuthority = false;
@@ -245,6 +258,7 @@ class Game {
       yaw: this.player.yaw,
       speed: this.carSpeed,
       steer: this.carSteer,
+      slip: this.carSlip,
     };
   }
   private applyDrivePose(pose: DrivePose) {
@@ -252,10 +266,11 @@ class Game {
     this.player.yaw = pose.yaw;
     this.carSpeed = pose.speed;
     this.carSteer = pose.steer;
+    this.carSlip = pose.slip ?? 0;
     this.player.velocity.set(
-      -Math.sin(pose.yaw) * pose.speed,
+      -Math.sin(pose.yaw - this.carSlip) * pose.speed,
       0,
-      -Math.cos(pose.yaw) * pose.speed,
+      -Math.cos(pose.yaw - this.carSlip) * pose.speed,
     );
   }
   private reconcileDrive(m: { index: number; seq: number; pose: DrivePose }) {
@@ -267,6 +282,7 @@ class Game {
       predicted.yaw === m.pose.yaw &&
       predicted.speed === m.pose.speed &&
       predicted.steer === m.pose.steer &&
+      (predicted.slip ?? 0) === (m.pose.slip ?? 0) &&
       predicted.p.every((v, i) => Math.abs(v - m.pose.p[i]) < 0.0001)
     )
       return;
@@ -285,9 +301,66 @@ class Game {
     this.previousCarPosition.copy(this.player.position);
     this.previousCarYaw = this.player.yaw;
   }
-  cockpit = false;
+  cockpit = settings.cockpit === true;
   private cockpitYaw = 0;
   private doorUntil = 0;
+  private get seatActor() {
+    return this.mode === "online" ? this.network.id : "local";
+  }
+  private get seatTime() {
+    return this.mode === "online"
+      ? this.network.worldTime * 1000
+      : this.elapsed * 1000;
+  }
+  private carPrompt(car: CountyCar) {
+    const work = car.interaction;
+    if (work) {
+      if (work.actor !== this.seatActor)
+        return work.occupant === this.seatActor
+          ? "BEING HIJACKED · E EXIT"
+          : "VEHICLE IN USE";
+      const verb = {
+        lockpick: "LOCKPICKING",
+        hotwire: "HOTWIRING",
+        hijack: "HIJACKING",
+      }[work.action];
+      const progress = T.MathUtils.clamp(
+        (this.seatTime - work.started) / ACCESS_MS[work.action],
+        0,
+        1,
+      );
+      if (work.action === "hijack")
+        return verb + " · " + Math.round(progress * 100) + "%";
+      return (
+        verb +
+        (progress >= ACCESS_WINDOW[0] && progress <= ACCESS_WINDOW[1]
+          ? " · PRESS E NOW"
+          : " · E IN GREEN")
+      );
+    }
+    const action = {
+      secured: "SECURED · CANNOT LOCKPICK",
+      enter: "E · ENTER",
+      lockpick: "E · LOCKPICK",
+      hotwire: "E · HOTWIRE",
+      hijack: "E · HIJACK",
+    }[seatAction(car)];
+    return action + " · " + car.kind.toUpperCase();
+  }
+  private advanceLocalSeats() {
+    for (const car of this.cars) {
+      const work = car.interaction;
+      if (!work) continue;
+      const valid =
+        this.combat.hp > 0 &&
+        this.vehicle < 0 &&
+        canReachCar(car, this.player.position.toArray());
+      const result = advanceSeatAction(car, valid, this.seatTime);
+      if (result === "missed") this.notice("MISSED · E TO RETRY");
+      if (result === "hijack" && work.occupant)
+        this.citizens?.ejectDriver(work.occupant);
+    }
+  }
   private seatPending = false;
   private seatRequestedAt = 0;
   private carKeyHeld = false;
@@ -301,6 +374,7 @@ class Game {
   }
   private structures?: CountyStructures;
   private debris?: CountyDebris;
+  private tires?: CountyTires;
   private restoringStructures = false;
   private aimedDoor() {
     if (!this.structures || this.vehicle >= 0) return;
@@ -341,13 +415,17 @@ class Game {
     }
   }
   nearestCar() {
+    const active = this.cars.findIndex(
+      (car) => car.interaction?.actor === this.seatActor,
+    );
+    if (active >= 0) return active;
     let nearest = -1,
       best = 25;
     this.cars.forEach((c, index) => {
       const distance = this.player.position.distanceToSquared(
         new T.Vector3(...c.p),
       );
-      if (!c.driver && distance < best) {
+      if (distance < best) {
         best = distance;
         nearest = index;
       }
@@ -358,6 +436,19 @@ class Game {
     const i = this.vehicle >= 0 ? this.vehicle : this.nearestCar();
     if (i < 0 || this.seatPending) return;
     this.carKeyHeld = true;
+    const car = this.cars[i];
+    const work = car.interaction;
+    const action =
+      this.vehicle >= 0
+        ? "exit"
+        : work?.actor === this.seatActor && work.action !== "hijack"
+          ? "confirm"
+          : seatAction(car);
+    if (
+      action === "secured" ||
+      (work && action !== "exit" && action !== "confirm")
+    )
+      return;
     if (this.mode === "online") {
       if (!this.network.active) return;
       this.seatPending = true;
@@ -366,10 +457,20 @@ class Game {
       this.network.send({
         type: "vehicle",
         driveVersion: 1,
-        action: this.vehicle < 0 ? "enter" : "exit",
+        action,
+        started: action === "confirm" ? work?.started : undefined,
         index: i,
       });
-    } else this.cars[i].driver = this.vehicle >= 0 ? null : "local";
+    } else if (action === "exit") car.driver = null;
+    else if (action === "confirm") {
+      const result = advanceSeatAction(
+        car,
+        canReachCar(car, this.player.position.toArray()),
+        this.seatTime,
+        true,
+      );
+      if (result === "missed") this.notice("MISSED · E TO RETRY");
+    } else startSeatAction(car, "local", action, this.seatTime);
   }
   private previousCarPosition = new T.Vector3();
   private previousCarYaw = 0;
@@ -378,7 +479,8 @@ class Game {
     const i = this.cars.findIndex((c) => c.driver === mine);
     if (this.vehicle !== i) {
       this.doorUntil = performance.now() + 650;
-      this.carSpeed = this.carSteer = 0;
+      this.carSpeed = this.carSlip = this.carSteer = 0;
+      this.carSkidding = false;
       this.drivePending = [];
       this.sentDriveSequence = this.driveSequence;
       if (i >= 0) {
@@ -411,8 +513,14 @@ class Game {
     const i = this.vehicle;
     this.render.countyCars.forEach((model, k) => {
       const c = this.cars[k];
-      if (!c) return;
+      model.visible = !!c;
+      if (!c) {
+        this.tires?.reset(k);
+        return;
+      }
+      let skidding = false;
       if (k === i) {
+        skidding = this.carSkidding;
         const alpha = T.MathUtils.clamp(this.accumulator * 120, 0, 1);
         model.position.lerpVectors(
           this.previousCarPosition,
@@ -426,6 +534,7 @@ class Game {
         );
       } else if (c.driver) {
         const driver = this.network.players.find((p) => p.id === c.driver);
+        skidding = !!driver && !driver.npc && driver.skiddingCar === k;
         const target = new T.Vector3(
             ...(driver ? this.network.position(driver) : c.p),
           ),
@@ -440,13 +549,32 @@ class Game {
         model.position.fromArray(c.p);
         model.rotation.y = c.yaw;
       }
+      const distance = model.position.distanceTo(this.render.camera.position);
+      if (c.driver && skidding && distance < 75)
+        this.tires?.sample(
+          k,
+          c.driver,
+          model.position,
+          model.rotation.y,
+          c.kind,
+          settings.reduced,
+        );
+      else this.tires?.reset(k);
       model.update(
         c.driver,
         performance.now() / 1000,
-        model.position.distanceTo(this.render.camera.position),
+        distance,
         k === i ? -this.carSteer / 0.45 : 0,
         c.responding,
         settings.reduced,
+        c.interaction?.action === "hijack"
+          ? T.MathUtils.clamp(
+              (this.seatTime - c.interaction.started) / ACCESS_MS.hijack,
+              0,
+              1,
+            )
+          : undefined,
+        k === i && this.cockpit,
       );
     });
   }
@@ -596,12 +724,14 @@ class Game {
           )
         : undefined;
     this.seatPending = false;
-    this.carSpeed = this.carSteer = this.crashUntil = 0;
+    this.carSpeed = this.carSlip = this.carSteer = this.crashUntil = 0;
     this.physics = physics;
     this.seed = seed;
     this.district = district;
     await this.render.build(city);
     if (version !== this.buildVersion) return;
+    this.tires =
+      seed === COUNTY ? new CountyTires(this.render.cityGroup) : undefined;
     this.debris =
       seed === COUNTY ? new CountyDebris(this.render.cityGroup) : undefined;
     this.rubbleView =
@@ -836,7 +966,8 @@ class Game {
     this.collected.clear();
     this.elapsed = 0;
     this.selfReaction = undefined;
-    this.setWeapon(0, true);
+    this.combat.onEquip = (i) => this.setWeapon(i, true);
+    this.setWeapon(FISTS, true);
     $("district-number").textContent = String(district).padStart(2, "0");
     $("district-stamp")?.setAttribute("data-district", String(district));
   }
@@ -855,9 +986,10 @@ class Game {
     }
     this.render.camera.add(this.weaponMesh);
     $("weapon-name").textContent = WEAPONS[i].name;
-    [...$("weapon-slots").children].forEach((el, n) =>
-      el.classList.toggle("active", n === i),
-    );
+    [...$("weapon-slots").children].forEach((el, n) => {
+      el.classList.toggle("active", n === i);
+      el.classList.toggle("hidden", !this.combat.owned.includes(n));
+    });
   }
   async start(mode: Mode, spawn?: V3) {
     if (this.busy) return;
@@ -1237,12 +1369,23 @@ class Game {
         return;
       }
       if (e.code === "KeyV" && this.vehicle >= 0) {
+        if (e.repeat) return;
         this.cockpit = !this.cockpit;
+        settings.cockpit = this.cockpit;
+        saveSettings();
+        this.cockpitYaw = 0;
+        this.player.pitch = 0;
+        this.notice(this.cockpit ? "Driver’s seat" : "Chase camera");
         return;
       }
       if (e.code === "KeyE" && this.seed === COUNTY) {
         const door = this.aimedDoor();
-        if (door !== undefined && !this.seatPending) this.useDoor(door);
+        if (
+          door !== undefined &&
+          !this.seatPending &&
+          !this.cars.some((car) => car.interaction?.actor === this.seatActor)
+        )
+          this.useDoor(door);
         else this.useCar();
         return;
       }
@@ -1290,10 +1433,10 @@ class Game {
       (e) => {
         if (this.state === "play") {
           e.preventDefault();
-          this.setWeapon(
-            (this.combat.weapon + (e.deltaY > 0 ? 1 : WEAPONS.length - 1)) %
-              WEAPONS.length,
-          );
+          const owned = [...this.combat.owned].sort((a, b) => a - b);
+          const next =
+            owned.indexOf(this.combat.weapon) + (e.deltaY > 0 ? 1 : -1);
+          this.setWeapon(owned[(next + owned.length) % owned.length]);
         }
       },
       { passive: false },
@@ -1430,7 +1573,7 @@ class Game {
         this.network.duel
           ? "DUEL · REAL PLAYERS ONLY"
           : this.seed === COUNTY
-            ? "SWITCHBACK COUNTY · E TO ENTER A CAR"
+            ? "SWITCHBACK COUNTY · APPROACH A CAR OR FIND A WEAPON"
             : "WELCOME TO RUST",
         2,
       );
@@ -1465,14 +1608,21 @@ class Game {
         ? [["Q / E", "Hook or release. Hold to reel in."]]
         : []),
       ["LMB / RMB", "Fire / aim"],
-      ["1–5 / Wheel", "Switch weapon · 5 equips fists"],
+      [
+        "1–5 / Wheel",
+        "Switch collected weapons · walk over a marked gun to equip it",
+      ],
       ["LMB with fists", "Punch · hold for jab, cross and hook"],
       ["R", "Reload"],
       ...(county
         ? [
-            ["E", "Open a door or enter / exit a car"],
+            ["E", "Use doors, enter or exit cars, or take an occupied car"],
+            ["E at the green mark", "Confirm each lockpick and hotwire stage"],
             ["W S / A D", "Accelerate or reverse / steer"],
-            ["Space / V in car", "Brake / change camera"],
+            [
+              "Space / V in car",
+              "Handbrake drift / switch driver’s seat or chase camera",
+            ],
           ]
         : []),
       ["Tab / Esc", "Scoreboard / pause"],
@@ -1591,6 +1741,7 @@ class Game {
       this.sentDriveSequence = this.driveSequence = m.drive.seq;
       this.carSpeed = m.drive.pose.speed;
       this.carSteer = m.drive.pose.steer;
+      this.carSlip = m.drive.pose.slip ?? 0;
     }
     this.player.stamina = stamina;
     this.player.height = player.height ?? 1.76;
@@ -1606,7 +1757,8 @@ class Game {
       0,
       (m.reloadRemaining ?? player.reloadRemaining ?? 0) / 1000,
     );
-    this.combat.weapon = player.weapon ?? 0;
+    this.combat.owned = player.owned ?? [FISTS];
+    this.combat.weapon = player.weapon ?? FISTS;
     this.setWeapon(this.combat.weapon, true);
     this.combat.cooldown = Math.max(
       0,
@@ -1651,11 +1803,16 @@ class Game {
       if (m.type === "resumed") this.restoreStructures();
     }
     if (m.type === "vehicle-seat") {
+      if (m.result === "missed") this.notice("MISSED · E TO RETRY");
       this.seatPending = false;
       this.driveAuthority = m.driveVersion === 1;
       if (this.seed === COUNTY && this.cars[m.index] && m.car) {
         this.cars[m.index] = m.car;
         this.syncSeat();
+        if (m.ejected) {
+          this.player.position.fromArray(m.ejected);
+          this.notice("HIJACKED");
+        }
       }
     }
     if (m.type === "snapshot" && m.cars && this.seed === COUNTY) {
@@ -1751,6 +1908,7 @@ class Game {
       this.player.position.fromArray(m.p);
       this.player.velocity.set(0, 0, 0);
     }
+    if (m.type === "weapon-pickup") this.combat.collectWeapon(m.weapon);
     if (m.type === "ammo") {
       this.combat.mags = m.mags;
       this.combat.reloadTime = Math.max(0, m.reloadRemaining / 1000);
@@ -1760,7 +1918,10 @@ class Game {
       this.player.reset(m.p);
       this.notoriety = 0;
       this.combat.hp = 100;
-      this.combat.mags = WEAPONS.map((g) => g.mag);
+      Object.assign(this.combat, newInventory());
+      this.combat.reloadTime = 0;
+      this.combat.cooldown = 0;
+      this.setWeapon(FISTS, true);
       this.resume();
     }
     if (
@@ -1873,7 +2034,10 @@ class Game {
         from = pose.p;
       const car = this.cars[this.vehicle];
       const online = this.mode === "online";
-      if (!online || !this.driveAuthority || this.drivePending.length < 120) {
+      if (
+        !car.interaction &&
+        (!online || !this.driveAuthority || this.drivePending.length < 120)
+      ) {
         const impact = this.driveWorld!.advance(
           pose,
           car.kind,
@@ -1884,6 +2048,7 @@ class Game {
           car,
         );
         this.applyDrivePose(pose);
+        this.carSkidding = tiresSkidding(pose, input.jump);
         if (online) {
           if (this.driveAuthority)
             this.drivePending.push({
@@ -1957,7 +2122,12 @@ class Game {
     )
       this.combat.fire();
     this.tickCitizens(dt);
-    this.combat.update(dt, this.time, this.render.camera);
+    this.combat.update(
+      dt,
+      this.time,
+      this.render.camera,
+      this.vehicle < 0 && !this.seatPending,
+    );
     if (this.player.grounded) this.audio.step(this.time, this.player.speed);
     if (
       Math.abs(this.player.position.x) > this.city.bounds ||
@@ -2020,11 +2190,28 @@ class Game {
     v.update(
       dt,
       this.aiming && !p.traversing && this.combat.reloadTime <= 0,
-      p.speed,
+      this.vehicle >= 0
+        ? Math.abs(this.carSpeed)
+        : p.grounded
+          ? p.speed
+          : p.velocity.length(),
       p.grounded,
       settings.reduced,
       settings.fov,
       this.combat.weapon === 3 ? 22 : 57,
+      this.vehicle >= 0
+        ? this.cockpit
+          ? "cockpit"
+          : "chase"
+        : p.anchor
+          ? "swing"
+          : p.action === "WALL RUN"
+            ? "wall"
+            : p.slide > 0
+              ? "slide"
+              : p.grounded
+                ? "run"
+                : "air",
     );
     const steady = (1 - v.ads * 0.85) * (1 - v.fireWeight * 0.7) * motion;
     const recoil = v.kick * (1 - v.ads * 0.5) * motion;
@@ -2073,11 +2260,18 @@ class Game {
     if (car) {
       const yaw = car.rotation.y;
       if (this.cockpit) {
-        cam.position
-          .copy(car.seat)
-          .applyQuaternion(car.quaternion)
-          .add(car.position);
-        cam.rotation.set(p.pitch, yaw + this.cockpitYaw, 0, "YXZ");
+        cam.position.set(
+          car.seat.x - 0.045 * car.doorSide,
+          car.seat.y - 0.065,
+          car.seat.z + 0.058,
+        );
+        car.localToWorld(cam.position);
+        cam.rotation.set(
+          T.MathUtils.clamp(p.pitch - 0.115, -1.05, 0.95),
+          yaw + this.cockpitYaw,
+          0,
+          "YXZ",
+        );
       } else {
         cam.position
           .set(0, 3.1, 6)
@@ -2100,7 +2294,7 @@ class Game {
     const scoped =
       this.combat.weapon === 3 ? T.MathUtils.smoothstep(v.ads, 0.65, 0.98) : 0;
     $("sniper-scope").style.opacity = String(scoped);
-    $("crosshair").style.opacity = String(1 - scoped);
+    $("crosshair").style.opacity = this.vehicle >= 0 ? "0" : String(1 - scoped);
     this.weaponMesh.visible =
       this.vehicle < 0 && this.combat.hp > 0 && scoped < 0.98;
     if (this.combat.weapon === FISTS) {
@@ -2322,6 +2516,36 @@ class Game {
         this.remoteRopes.delete(id);
       }
   }
+  private drawMapPlayers(
+    c: CanvasRenderingContext2D,
+    cx: number,
+    cz: number,
+    scale: number,
+  ) {
+    if (this.mode !== "online" || !this.network.active) return;
+    for (const other of this.network.players) {
+      if (other.npc || other.id === this.network.id || other.hp <= 0) continue;
+      const [x, , z] = this.network.position(other);
+      const dx = (x - cx) * scale,
+        dz = (z - cz) * scale;
+      const edge = Math.max(1, Math.abs(dx) / 86, Math.abs(dz) / 86);
+      c.save();
+      c.translate(95 + dx / edge, 95 + dz / edge);
+      c.rotate(edge > 1 ? Math.atan2(dx, -dz) : -other.yaw);
+      c.lineWidth = 1.6;
+      c.strokeStyle = "#fffdf3";
+      c.fillStyle = "#2442ae";
+      c.beginPath();
+      c.moveTo(0, -5);
+      c.lineTo(4, 4);
+      c.lineTo(0, 2);
+      c.lineTo(-4, 4);
+      c.closePath();
+      c.fill();
+      c.stroke();
+      c.restore();
+    }
+  }
   drawCityMap() {
     const canvas = $<HTMLCanvasElement>("city-map"),
       c = canvas.getContext("2d")!;
@@ -2367,6 +2591,7 @@ class Game {
         }
       c.restore();
       c.save();
+      this.drawMapPlayers(c, p.x, p.z, scale);
       c.translate(95, 95);
       c.rotate(-this.player.yaw);
       c.fillStyle = "#d23c45";
@@ -2457,6 +2682,7 @@ class Game {
     }
     const p = this.player.position;
     c.save();
+    this.drawMapPlayers(c, 0, 0, scale);
     c.translate(map(p.x), map(p.z));
     c.rotate(-this.player.yaw);
     c.fillStyle = "#d23c45";
@@ -2517,19 +2743,41 @@ class Game {
     const nearby =
       this.seed === COUNTY && this.vehicle < 0 ? this.nearestCar() : -1;
     const door = this.aimedDoor();
-    $("action").textContent = this.seatPending
-      ? this.vehicle < 0
-        ? "ENTERING…"
-        : "EXITING…"
-      : this.vehicle >= 0
-        ? "SPACE BRAKE · E EXIT · V CAMERA"
-        : door !== undefined
-          ? this.structures?.states.get(door) === 1
-            ? "E · CLOSE DOOR"
-            : "E · OPEN DOOR"
-          : nearby >= 0
-            ? "E · ENTER CAR · " + this.cars[nearby].kind.toUpperCase()
-            : p.action;
+    const work = this.cars[nearby]?.interaction;
+    const timing = work?.actor === this.seatActor && work.action !== "hijack";
+    const actionLabel = $("action");
+    actionLabel.classList.toggle("seat-timing", !!timing);
+    if (timing) {
+      const progress = T.MathUtils.clamp(
+        (this.seatTime - work.started) / ACCESS_MS[work.action],
+        0,
+        1,
+      );
+      actionLabel.style.setProperty("--seat-progress", 100 * progress + "%");
+      actionLabel.style.setProperty(
+        "--seat-from",
+        100 * ACCESS_WINDOW[0] + "%",
+      );
+      actionLabel.style.setProperty("--seat-to", 100 * ACCESS_WINDOW[1] + "%");
+    }
+    actionLabel.textContent =
+      work?.actor === this.seatActor
+        ? this.carPrompt(this.cars[nearby])
+        : this.seatPending
+          ? this.vehicle < 0
+            ? "ENTERING…"
+            : "EXITING…"
+          : this.vehicle >= 0
+            ? this.cars[this.vehicle]?.interaction
+              ? this.carPrompt(this.cars[this.vehicle])
+              : "SPACE HANDBRAKE · E EXIT · V CAMERA"
+            : door !== undefined
+              ? this.structures?.states.get(door) === 1
+                ? "E · CLOSE DOOR"
+                : "E · OPEN DOOR"
+              : nearby >= 0
+                ? this.carPrompt(this.cars[nearby])
+                : p.action;
     $("speed-fill").style.width = Math.min(100, (p.speed / 35) * 100) + "%";
     $("ammo").textContent = String(c.mags[c.weapon] ?? 0).padStart(2, "0");
     $("mag-size").textContent = String(gun.mag);
@@ -2559,7 +2807,8 @@ class Game {
     $("notice").style.opacity = this.time < this.noticeUntil ? "1" : "0";
     $("feed").style.opacity = this.time < this.feedUntil ? "1" : "0";
     const hit = p.grappleHit();
-    $("hook-reticle").style.opacity = hit && hit.distance > 2 ? "0.65" : "0";
+    $("hook-reticle").style.opacity =
+      this.vehicle < 0 && hit && hit.distance > 2 ? "0.65" : "0";
     $("grapple-status").textContent = p.anchor
       ? `${Math.round(p.ropeLength)}m · ${this.input.reel ? "REELING" : "HOLD Q TO REEL"}`
       : hit && hit.distance > 2
@@ -2571,6 +2820,14 @@ class Game {
     $("compass").textContent =
       `· · · ${directions[Math.round(angle) % 8]} · · ·`;
     const markers: $Marker[] = [];
+    const feet = p.position.toArray() as V3;
+    for (const drop of c.weaponDrops)
+      if (!c.owned.includes(drop.weapon) && distance(drop.p, feet) < 32)
+        markers.push({
+          p: drop.p,
+          label: WEAPONS[drop.weapon].name,
+          icon: "↓",
+        });
     if (this.mode === "contract" && this.seed !== COUNTY) {
       this.city.beacons.forEach((b, i) => {
         if (!this.collected.has(i))
@@ -2619,6 +2876,8 @@ class Game {
     }
     if (this.state !== "loading") {
       if (this.seed === COUNTY) {
+        if (this.mode !== "online" && this.state === "play")
+          this.advanceLocalSeats();
         this.syncSeat();
         if (this.state === "play") this.wreckage?.step(dt);
         this.rubbleView?.update(dt);
@@ -2640,6 +2899,7 @@ class Game {
         this.syncCars(frameSeconds);
         this.render.cityGroup.userData.updateDoors?.(dt);
         this.debris?.update(dt);
+        this.tires?.update(dt);
       }
       this.updateVisuals(dt);
       this.combat.renderShots(dt);

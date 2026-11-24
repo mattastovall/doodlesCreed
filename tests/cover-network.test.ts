@@ -32,6 +32,9 @@ test("server accepts valid cover shots and rejects oversized lean", async () => 
     const w = await ready,
       room = rooms.rooms.get(w.code)!,
       p = [...room.players.values()][0];
+    p.owned.push(0);
+    p.weapon = 0;
+    p.mags[0] = 30;
     p.p = [0, 0, 0];
     p.ready = true;
     p.lastShot = 0;

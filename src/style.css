@@ -1612,3 +1612,24 @@ dialog .error:empty {
   ) {
   display: none;
 }
+
+#action.seat-timing::after {
+  content: "";
+  display: block;
+  height: 6px;
+  margin-top: 3px;
+  border: 1px solid currentColor;
+  background:
+    linear-gradient(
+      to right,
+      transparent calc(var(--seat-progress) - 2px),
+      white calc(var(--seat-progress) - 2px) calc(var(--seat-progress) + 2px),
+      transparent calc(var(--seat-progress) + 2px)
+    ),
+    linear-gradient(
+      to right,
+      #363947 var(--seat-from),
+      #348460 var(--seat-from) var(--seat-to),
+      #363947 var(--seat-to)
+    );
+}

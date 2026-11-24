@@ -2,7 +2,19 @@
 const damp = (rate: number, dt: number) => Math.exp(-rate * dt);
 export const sensitivityScale = (fov: number, hip: number) =>
   Math.tan((fov * Math.PI) / 360) / Math.tan((hip * Math.PI) / 360);
+// Speed at the top of each camera ramp (m/s), followed by its maximum FOV gain.
+const speedLens = {
+  run: [13.2, 6],
+  slide: [20, 9],
+  wall: [17, 8],
+  air: [23, 9],
+  swing: [34, 14],
+  cockpit: [38, 10],
+  chase: [38, 16],
+} as const;
+export type LensMode = keyof typeof speedLens;
 export class ViewMotion {
+  private speedOffset = 0;
   ads = 0;
   fov = 82;
   phase = 0;
@@ -58,6 +70,7 @@ export class ViewMotion {
     reduced: boolean,
     hipFov: number,
     adsFov = 57,
+    mode: LensMode = grounded ? "run" : "air",
   ) {
     this.ads += (Number(aiming) - this.ads) * (1 - damp(22, dt));
     this.fireWeight *= damp(7, dt);
@@ -75,10 +88,15 @@ export class ViewMotion {
       (1 - this.ads * 0.85) *
       (1 - this.fireWeight * 0.7) *
       Number(!reduced);
-    const speedFov =
-      Math.min(12, Math.max(0, speed - 8) * 0.7) *
-      Number(!reduced) *
-      (1 - this.ads);
-    this.fov = hipFov + (adsFov - hipFov) * this.ads + speedFov;
+    const [fullSpeed, gain] = speedLens[mode];
+    const t = Math.min(1, Math.abs(speed) / fullSpeed);
+    const target = gain * t * t * (3 - 2 * t);
+    this.speedOffset = reduced
+      ? 0
+      : this.speedOffset +
+        (target - this.speedOffset) *
+          (1 - damp(target > this.speedOffset ? 5 : 7, dt));
+    this.fov =
+      hipFov + (adsFov - hipFov) * this.ads + this.speedOffset * (1 - this.ads);
   }
 }

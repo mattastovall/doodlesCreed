@@ -162,6 +162,11 @@ test("county sessions share usable doors and wall breaches across joins and resu
       dz = wall.p[2] - inside[2];
     const yaw = Math.atan2(-dx, -dz);
     const pitch = Math.atan2(wall.p[1] - (inside[1] + 1.6), Math.hypot(dx, dz));
+    const shooter = [
+      ...rooms.rooms.get(host.welcome.code)!.players.values(),
+    ][0];
+    shooter.owned.push(0);
+    shooter.mags[0] = 30;
     move(host.ws, inside, yaw, pitch);
     // Fire the standard rifle at its normal cadence until the server removes the wall.
     const destroyed = new Set<WebSocket>();
@@ -374,6 +379,7 @@ test("a driver's sweep knocks down one citizen and both wire formats agree on in
     const driver = humans[0],
       other = humans[1],
       car = room.cars![0];
+    car.access = "open"; // This fixture exercises driving after access has been earned.
     assert.equal(driver.notoriety, 0);
     assert.equal(room.ai, null);
     assert.equal(room.npcs.length, 32);

@@ -208,6 +208,15 @@ try {
   await page.locator("#contract-mode").click();
   await page.locator("#play").click();
   await resume(page);
+  await get(() => {
+    const g = window.__doodles;
+    for (const weapon of [1, 0]) {
+      const drop = g.combat.weaponDrops.find((d) => d.weapon === weapon);
+      g.player.reset(drop.p);
+      g.step(1 / 120);
+    }
+    g.player.reset(g.city.spawns[0]);
+  });
   await page.mouse.down();
   await get(() => {
     const g = window.__doodles;

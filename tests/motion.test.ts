@@ -63,3 +63,23 @@ test("stance changes and flickering stair contacts never bypass height smoothing
     "lost contact must not snap the standing eye height",
   );
 });
+
+test("speed lens ramps by movement mode and respects reduced motion and aiming", () => {
+  const view = new ViewMotion();
+  const settle = (
+    speed: number,
+    mode: "run" | "swing" | "chase" | "cockpit",
+    reduce = false,
+    aim = false,
+  ) => {
+    for (let i = 0; i < 120; i++)
+      view.update(1 / 60, aim, speed, true, reduce, 82, 57, mode);
+    return view.fov;
+  };
+  assert.ok(Math.abs(settle(13.2, "run") - 88) < 0.01);
+  assert.ok(Math.abs(settle(34, "swing") - 96) < 0.01);
+  assert.ok(Math.abs(settle(38, "chase") - 98) < 0.01);
+  assert.ok(Math.abs(settle(38, "cockpit") - 92) < 0.01);
+  assert.equal(settle(38, "chase", true), 82);
+  assert.ok(Math.abs(settle(13, "run", false, true) - 57) < 0.01);
+});

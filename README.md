@@ -148,8 +148,11 @@ NPC presence is bounded to a 100 m player radius. Solo NPCs outside it are remov
 ### Switchback County
 
 Choose **Switchback County** from the main menu, or open `/?mode=county`.
-Start on foot among pedestrians, motorists and police patrols. Approach a parked car
-and press E to drive. Use W/S to accelerate or reverse, A/D to steer and Space to brake.
+You start on foot with fists. Walk over a weapon pickup to equip it. The minimap shows you in red and other living players in blue. Arrows at the map edge point toward distant players.
+
+Parked cars start locked. Forty percent can be opened and started. Stand beside one and press **E** to begin each stage, then tap **E** in the highlighted timing window. The other parked cars display **Secured**. Press **E** beside an occupied vehicle to pull its driver out and take the seat.
+
+Use **W/S** to accelerate, brake or reverse and **A/D** to steer. Hold **Space** while steering at speed to slide the rear wheels, then release it to regain grip.
 The fleet includes saloons, coupes, family minivans, taxis and compact delivery vans. Look for a taxi rank near town hall or a delivery van at the market. Press V to switch between the chase camera and the driver’s seat. In the cockpit, use the mouse to look around. Press E again to open the driver’s door and return to foot combat. Westhaven and Eastbank share a highway with open
 highlands on either side. Each public county holds up to 30 human players. Rust remains available from the main menu.
 

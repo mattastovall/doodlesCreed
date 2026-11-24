@@ -21,6 +21,7 @@ export interface RemoteState {
   height: number;
   anchor: V3 | null;
   npc?: boolean;
+  skiddingCar?: number;
   lean?: number;
 }
 export class Network {
@@ -344,6 +345,7 @@ export class Network {
               fall: a[15],
               swing: a[16],
               reaction: a[17],
+              skiddingCar: a[18],
             }));
           const now = performance.now();
           for (const p of m.players as RemoteState[]) {

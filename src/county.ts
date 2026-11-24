@@ -1,3 +1,4 @@
+import type { SeatInteraction } from "./county-car-access.ts";
 import { architectureLadders, cityLot } from "./county-architecture.ts";
 import { randomSeed, type V3, type City, type Box } from "./world.ts";
 import type { Street } from "./city-plan.ts";
@@ -167,6 +168,8 @@ export const VEHICLES = [
 ] as const;
 export type VehicleKind = (typeof VEHICLES)[number];
 export interface CountyCar {
+  access?: "locked" | "secured" | "picked" | "open";
+  interaction?: SeatInteraction;
   patrol?: boolean;
   responding?: boolean;
   p: V3;
@@ -215,6 +218,13 @@ export function parkedCars(lots = planCounty().lots): CountyCar[] {
       driver: null,
     });
   }
+  const ranked = result
+    .map((car) => ({ car, rank: rand() }))
+    .sort((a, b) => a.rank - b.rank);
+  const pickable = Math.round(ranked.length * 0.4);
+  ranked.forEach(({ car }, i) => {
+    car.access = i < pickable ? "locked" : "secured";
+  });
   return result;
 }
 

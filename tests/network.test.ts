@@ -75,6 +75,9 @@ test("the server owns damage and scores, rejects client-specified damage and blo
     await rb;
     const room = rooms.rooms.get(welcome.code)!;
     const [shooter, victim] = [...room.players.values()];
+    shooter.owned.push(0);
+    shooter.weapon = 0;
+    shooter.mags[0] = 30;
     shooter.p = [15, 0.1, 20];
     victim.p = [15, 0.1, 10];
     shooter.yaw = 0;
@@ -137,6 +140,9 @@ test("crouching replicates body height and moves the server weapon origin down",
     const ready = next(a, "welcome");
     a.send(JSON.stringify({ type: "create", name: "Croucher", seed: "paper" }));
     const welcome = await ready;
+    const player = [...rooms.rooms.get(welcome.code)!.players.values()][0];
+    player.owned.push(0);
+    player.mags[0] = 30;
     const snapshot = next(a, "snapshot");
     a.send(
       JSON.stringify({
@@ -203,6 +209,69 @@ test("multiplayer accepts outer-city movement and anchors, then enforces the gen
     assert.equal(p.p[0], room.city.bounds - 0.5);
   } finally {
     a.close();
+    rooms.dispose();
+    wss.close();
+  }
+});
+
+test("a player starts unarmed, acquires only nearby guns, and respawns with fists", async () => {
+  const wss = new WebSocketServer({ port: 0 });
+  await new Promise((r) => wss.on("listening", r));
+  const rooms = new Rooms(wss);
+  const ws = await client((wss.address() as any).port);
+  try {
+    const welcome = next(ws, "welcome");
+    ws.send(JSON.stringify({ type: "create", seed: "paper" }));
+    const room = rooms.rooms.get((await welcome).code)!;
+    const [[socket, player]] = room.players;
+    const drop = room.weaponDrops[0];
+    const state = () =>
+      rooms.handle(socket, {
+        type: "state",
+        p: player.p,
+        yaw: 0,
+        pitch: 0,
+        weapon: drop.weapon,
+      });
+    state();
+    assert.deepEqual(player.owned, [4]);
+    assert.equal(player.weapon, 4);
+    assert.equal(player.mags[drop.weapon], 0);
+    rooms.handle(socket, {
+      type: "state",
+      p: drop.p,
+      yaw: 0,
+      pitch: 0,
+      weapon: drop.weapon,
+    });
+    assert.deepEqual(
+      player.owned,
+      [4],
+      "rejected movement cannot award a pickup",
+    );
+    player.p = [...drop.p];
+    const grant = next(ws, "weapon-pickup");
+    state();
+    assert.equal((await grant).weapon, drop.weapon);
+    assert.deepEqual(player.owned, [4, drop.weapon]);
+    state();
+    assert.equal(player.weapon, drop.weapon);
+    const full = player.mags[drop.weapon];
+    rooms.handle(socket, { type: "fire" });
+    state();
+    assert.equal(
+      player.mags[drop.weapon],
+      full - 1,
+      "standing on a collected gun cannot refill it",
+    );
+    player.hp = 0;
+    player.deadAt = Date.now() - 3000;
+    rooms.handle(socket, { type: "respawn" });
+    assert.deepEqual(player.owned, [4]);
+    assert.equal(player.weapon, 4);
+    assert.ok(player.mags.every((n) => n === 0));
+  } finally {
+    ws.close();
     rooms.dispose();
     wss.close();
   }

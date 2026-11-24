@@ -1,3 +1,4 @@
+import { besideCar } from "./county-car-access.ts";
 import type { CrimeState } from "./county-crime.ts";
 import type { Npc } from "../server/npcs.ts";
 import { movementYaw } from "./actor-hit.ts";
@@ -91,6 +92,7 @@ function newCitizen(id: string, name: string, p: V3): CountyCitizen {
     lastShot: 0,
     deadAt: 0,
     shieldUntil: 0,
+    owned: [2],
     mags: [30, 8, 14, 5],
     reloadUntil: 0,
     reloadWeapon: 0,
@@ -390,6 +392,11 @@ export class CountyCitizens {
         a.targetId = undefined;
         continue;
       }
+      if (
+        a.car !== undefined &&
+        this.cars[a.car].interaction?.action === "hijack"
+      )
+        continue;
       const target = this.target(a, players, now);
       a.targetId = target?.id;
       a.engaged =
@@ -422,6 +429,14 @@ export class CountyCitizens {
         this.walk(a, route, target, players, dt, now, hurt, shot);
       else this.drive(a, route, target, players, dt, now, hurt);
     }
+  }
+  ejectDriver(id: string) {
+    const a = this.actors.find((actor) => actor.id === id);
+    if (!a || a.car === undefined) return;
+    const car = this.cars[a.car];
+    const landing = besideCar(car);
+    this.leaveCar(a, this.routes.get(id)!);
+    if (this.queries.clear(landing, a.height)) a.p = landing;
   }
   private leaveCar(a: CountyCitizen, r: Route) {
     const car = this.cars[a.car!];

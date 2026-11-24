@@ -165,6 +165,7 @@ test("two players share a single authoritative punch per swing, with wind-up, ca
     assert.equal((await hook).damage, 30);
     await delay(330);
     startPunch();
+    attacker.owned.push(0);
     equip(0);
     await delay(220);
     assert.equal(victim.hp, 25, "holstering cancels pending contact");

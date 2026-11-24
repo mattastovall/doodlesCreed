@@ -14,12 +14,14 @@ test("sniper selects, hits a distant NPC, enforces its cycle and reloads five ro
     const p = new Controller(ph, [0, 0, 0]);
     const c = new Combat(
       new Scene(),
-      { nodes: [], links: [] } as any,
+      { nodes: [], links: [], spawns: [[0, 0, 0]], streetNodes: [] } as any,
       p,
       new AudioEngine(),
       false,
     );
-    assert.ok(c.switchWeapon(3));
+    assert.equal(c.switchWeapon(3), false);
+    c.collectWeapon(3);
+    assert.equal(c.weapon, 3);
     assert.equal(c.mags[3], 5);
     c.bots = [
       {
@@ -81,6 +83,8 @@ test("multiplayer sniper owns long-range damage, fire rate, ammo and reload", as
       p = [...room.players.values()][0];
     p.ready = true;
     p.weapon = 3;
+    p.owned.push(3);
+    p.mags[3] = 5;
     p.p = [0, 100, 0];
     p.yaw = 0;
     p.pitch = 0;

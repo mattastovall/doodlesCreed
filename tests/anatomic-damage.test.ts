@@ -34,6 +34,8 @@ test("server resolves head, torso, arms and legs with matching damage messages",
     p.ready = true;
     p.p = [0, 100, 0];
     p.weapon = 0;
+    p.owned.push(0);
+    p.mags[0] = 30;
     const victim = {
       ...p,
       id: "anatomic-target",

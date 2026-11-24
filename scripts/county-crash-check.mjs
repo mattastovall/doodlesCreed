@@ -61,6 +61,7 @@ try {
       0,
       store.p[2] + c * 26 + s * 3.8,
     ];
+    car.access = "open";
     car.p = start;
     car.yaw = yaw;
     g.player.reset(start);

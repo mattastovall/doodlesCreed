@@ -109,10 +109,10 @@
           id="city-map"
           width="190"
           height="190"
-          aria-label="City streets, rooftop routes and current position"
+          aria-label="Minimap with your position in red and other players in blue"
         ></canvas
         ><span id="neighborhood-label">THE DISTRICT</span
-        ><small>solid: streets · gold: roof routes</small>
+        ><small>Red · you &nbsp; Blue · other players</small>
       </div>
       <div id="feed"></div>
       <div id="wave-status"></div>
@@ -141,14 +141,17 @@
           <span id="drive-gear" aria-label="Drive direction">N</span>
           <b id="drive-speed">0</b><span class="speed-unit">MPH</span>
         </div>
-        <div id="weapon-name">INKRIFLE</div>
-        <div id="ammo-row" class="ammo-row">
+        <div id="weapon-name">FISTS</div>
+        <div id="ammo-row" class="ammo-row hidden">
           <b id="ammo">30</b><span>/ <span id="mag-size">30</span></span>
         </div>
-        <div id="reload-label">FULL AUTO · R TO RELOAD</div>
+        <div id="reload-label">MELEE</div>
         <div id="weapon-slots">
-          <span class="active">1 RIFLE</span><span>2 SHOTGUN</span
-          ><span>3 PISTOL</span><span>4 SNIPER</span><span>5 FISTS</span>
+          <span class="hidden">1 RIFLE</span
+          ><span class="hidden">2 SHOTGUN</span
+          ><span class="hidden">3 PISTOL</span
+          ><span class="hidden">4 SNIPER</span
+          ><span class="active">5 FISTS</span>
         </div>
       </div>
       <div id="board" class="hidden"></div>

@@ -40,12 +40,12 @@ test("shot visuals start at the supplied muzzle while hits stay aligned to the a
     const p = new Controller(ph, [0, 0, 0]);
     const c = new Combat(
       new Scene(),
-      { nodes: [], links: [] } as any,
+      { nodes: [], links: [], spawns: [[0, 0, 0]], streetNodes: [] } as any,
       p,
       new AudioEngine(),
       false,
     );
-    c.switchWeapon(3);
+    c.collectWeapon(3);
     const muzzle = new Vector3(0.3, 1.3, -1.2);
     c.muzzlePosition = () => muzzle.clone();
     c.burst = () => {};

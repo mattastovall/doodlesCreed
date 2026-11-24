@@ -67,6 +67,7 @@ test("resume preserves state, rotates credentials, retries lost ACK, and explici
     rooms.hurt(room, player, { ...player, id: "attacker", kills: 0 }, 100);
     assert.equal(player.hp, 0);
     const b = await connect();
+    player.owned.push(3);
     player.weapon = 3;
     player.lastShot = Date.now();
     reply = next(b, "resumed");
@@ -84,6 +85,7 @@ test("resume preserves state, rotates credentials, retries lost ACK, and explici
     assert.equal(resumed.hp, 0);
     assert.deepEqual(resumed.p, pos);
     assert.deepEqual(resumed.mags, [4, 3, 2, 1]);
+    assert.deepEqual(resumed.owned, player.owned);
     assert.equal(resumed.kills, 7);
     assert.ok(resumed.fireRemaining > 0 && resumed.fireRemaining <= 1250);
     assert.equal(resumed.lastShot, player.lastShot);
