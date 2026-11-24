@@ -317,6 +317,7 @@ class Game {
   }
   cockpit = settings.cockpit === true;
   private cockpitYaw = 0;
+  private chaseSlip = 0;
   private doorUntil = 0;
   private get seatActor() {
     return this.mode === "online" ? this.network.id : "local";
@@ -508,6 +509,7 @@ class Game {
       this.doorUntil = performance.now() + 650;
       this.carSpeed = this.carSlip = this.carSteer = 0;
       this.carSkidding = false;
+      this.chaseSlip = 0;
       this.drivePending = [];
       this.sentDriveSequence = this.driveSequence;
       if (i >= 0) {
@@ -2353,11 +2355,26 @@ class Game {
           "YXZ",
         );
       } else {
-        cam.position
-          .set(0, 3.1, 6)
-          .applyQuaternion(car.quaternion)
-          .add(car.position);
-        cam.lookAt(car.position.x, car.position.y + 1, car.position.z);
+        // Follow part of the travel direction so the driver sees the chassis
+        // rotate across the road. Damping keeps the catch from whipping the view.
+        const targetSlip =
+          motion * T.MathUtils.clamp(this.carSlip * 0.78, -0.58, 0.58);
+        this.chaseSlip = T.MathUtils.damp(this.chaseSlip, targetSlip, 10, dt);
+        const heading = yaw - this.chaseSlip;
+        const sin = Math.sin(heading),
+          cos = Math.cos(heading);
+        const lead =
+          motion * T.MathUtils.smoothstep(this.carSpeed, 5, 32) * 1.8;
+        cam.position.set(
+          car.position.x + 6 * sin,
+          car.position.y + 3.1,
+          car.position.z + 6 * cos,
+        );
+        cam.lookAt(
+          car.position.x - lead * sin,
+          car.position.y + 1,
+          car.position.z - lead * cos,
+        );
       }
       const entry = T.MathUtils.smoothstep(
         (performance.now() - this.entryTime) / 450,

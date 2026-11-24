@@ -34,11 +34,11 @@ const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 // Launch acceleration (m/s²), power per unit mass (W/kg), forward limit (m/s),
 // and maximum front-wheel lock (radians). The same tune runs during server replay.
 const handling: Record<VehicleKind, [number, number, number, number]> = {
-  saloon: [5.7, 91, 40, 0.59],
-  coupe: [7.0, 118, 40, 0.61],
-  minivan: [4.5, 72, 35, 0.59],
-  delivery: [3.9, 58, 30, 0.57],
-  taxi: [5.1, 82, 38, 0.6],
+  saloon: [6.2, 108, 40, 0.59],
+  coupe: [7.6, 144, 40, 0.61],
+  minivan: [4.9, 81, 35, 0.59],
+  delivery: [4.2, 64, 30, 0.57],
+  taxi: [5.6, 95, 38, 0.6],
 };
 const massKg: Record<VehicleKind, number> = {
   saloon: 1500,
@@ -231,7 +231,7 @@ export class CountyDriveWorld {
       let braking = 0.35;
       if (slide) braking = throttle > 0 ? 1.4 : 3.8;
       else if (brake) braking = 9.8;
-      else if (slowing) braking = 8.2;
+      else if (slowing) braking = previous > 0 ? 12.4 : 8.2;
       speed =
         Math.sign(previous) *
         Math.max(0, magnitude - (resistance + braking) * dt);
@@ -245,14 +245,18 @@ export class CountyDriveWorld {
     }
     // Full parking lock at low speed. Limit lateral acceleration as speed rises,
     // including while the wheel returns from a previously tight turn.
-    const grip = slide ? 23 : 8.6;
+    // Fast bends are primarily grip turns. Unloading the throttle gives the
+    // front axle more bite; the service brake tightens the line further.
+    const pace = clamp((magnitude - 6) / 14, 0, 1);
+    const frontLoad = throttle === 0 ? 4.8 : slowing ? 6 : 0;
+    const grip = slide ? 31 : 8.6 + pace * (4.4 + frontLoad);
     const maxSteer = Math.atan(
       1 / Math.hypot(1 / Math.tan(lock), (speed * speed) / (wheelbase * grip)),
     );
     const target = -side * maxSteer;
     const rate =
-      (!side || state.steer * target < 0 ? 2.9 : 1.75) /
-      (1 + 0.035 * magnitude);
+      (!side || state.steer * target < 0 ? 3.7 : 2.25) /
+      (1 + 0.029 * magnitude);
     state.steer = clamp(
       state.steer + clamp(target - state.steer, -rate * dt, rate * dt),
       -maxSteer,
@@ -268,8 +272,12 @@ export class CountyDriveWorld {
     // As the chassis rotates, the contact patches gradually redirect its momentum.
     // Locking the rear axle lets the velocity retain its old heading for longer.
     const oldSlip = state.slip ?? 0;
+    // Countersteering catches a slide faster than waiting for the rear axle
+    // to come back into line. Both paths keep the existing travel direction.
+    const countersteering = side !== 0 && side * oldSlip > 0;
+    const recovery = slide ? 0.95 : countersteering ? 9.8 : 7.2;
     const nextSlip = clamp(
-      (oldSlip + turn) * Math.exp(-(slide ? 0.85 : 6.5) * dt),
+      (oldSlip + turn) * Math.exp(-recovery * dt),
       -0.92,
       0.92,
     );

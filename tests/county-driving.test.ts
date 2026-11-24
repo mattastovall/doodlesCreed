@@ -145,7 +145,7 @@ test("fleet launch, coasting, service brake and reverse use distinct responses",
     return pose.speed;
   };
   const launch = run("coupe", 0, w, 120);
-  assert.ok(launch > 6 && launch < 7);
+  assert.ok(launch > 7 && launch < 7.6);
   assert.ok(run("delivery", 0, w, 120) < launch);
   assert.ok(run("coupe", 25, w, 120) - 25 < launch);
   assert.ok(run("coupe", 20, neutral, 120) > 18);
@@ -203,4 +203,25 @@ test("a car can ford the lake margin and reverse back out at the deep-water limi
   for (let i = 0; i < 300; i++)
     world.advance(pose, "saloon", driveInput(-1, 0, false));
   assert.ok(pose.p[2] > wetZ + 5);
+});
+
+test("lifting off tightens a fast grip corner and countersteering catches a handbrake slide", () => {
+  const world = new CountyDriveWorld([]);
+  const power = car(20),
+    lift = car(20),
+    drift = car(20);
+  for (let tick = 0; tick < 90; tick++) {
+    world.advance(power, "coupe", driveInput(1, 1, false));
+    world.advance(lift, "coupe", driveInput(0, 1, false));
+    world.advance(drift, "coupe", driveInput(1, 1, true));
+  }
+  assert.ok(Math.abs(lift.yaw) > Math.abs(power.yaw) * 1.35);
+  assert.ok(Math.abs(lift.slip!) < 0.15 && lift.speed > 19);
+  assert.ok(Math.abs(drift.slip!) > 0.5);
+  const catchSlide = structuredClone(drift);
+  for (let tick = 0; tick < 18; tick++) {
+    world.advance(catchSlide, "coupe", driveInput(1, -1, false));
+    world.advance(drift, "coupe", w);
+  }
+  assert.ok(Math.abs(catchSlide.slip!) < Math.abs(drift.slip!) * 0.7);
 });
