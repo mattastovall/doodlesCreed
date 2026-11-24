@@ -26,7 +26,7 @@ import * as T from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { assetUrl } from "./release-info.ts";
 import { inkMaterial, INK } from "./render.ts";
-import { elevation, countyCars } from "./county.ts";
+import { elevation, countyCars, countyStreetTree } from "./county.ts";
 import { drawCountyRoads } from "./county-roads.ts";
 import { randomSeed, type City } from "./world.ts";
 
@@ -247,7 +247,7 @@ export async function drawCounty(city: City, group: T.Group) {
   });
   lamps.castShadow = true;
   group.add(lamps);
-  const trunkGeo = new T.CylinderGeometry(0.14, 0.24, 3.3, 8);
+  const trunkGeo = new T.CylinderGeometry(0.32, 0.5, 1, 8).translate(0, 0.5, 0);
   const trunkMat = new T.MeshBasicMaterial({ color: 0x776d65 });
   const crown = new T.SphereGeometry(1, 14, 9),
     colors = [];
@@ -265,6 +265,20 @@ export async function drawCounty(city: City, group: T.Group) {
     leaf.setHex(light > 0.55 ? 0x89a476 : light > -0.12 ? 0x618367 : 0x48695d);
     colors.push(leaf.r, leaf.g, leaf.b);
   }
+  crown.computeBoundingBox();
+  const bounds = crown.boundingBox!;
+  const center = bounds.getCenter(new T.Vector3()),
+    size = bounds.getSize(new T.Vector3());
+  crown
+    .translate(-center.x, -center.y, -center.z)
+    .scale(2 / size.x, 2 / size.y, 2 / size.z);
+  let crownReach = 0;
+  for (let i = 0; i < vertex.count; i++)
+    crownReach = Math.max(
+      crownReach,
+      Math.hypot(vertex.getX(i), vertex.getZ(i)),
+    );
+  crown.scale(1 / crownReach, 1, 1 / crownReach);
   crown.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
   const leafMat = new T.MeshBasicMaterial({ vertexColors: true });
   const cells = new Map<string, typeof city.boxes>();
@@ -280,9 +294,7 @@ export async function drawCounty(city: City, group: T.Group) {
       side: T.DoubleSide,
     });
   for (const trees of cells.values()) {
-    const palms = trees.filter(
-      (b) => Math.sin(b.p[0] * 2.7 + b.p[2] * 0.32) > -0.45,
-    );
+    const palms = trees.filter((b) => countyStreetTree(b.p[0], b.p[2]).palm);
     if (palms.length) {
       const instances = new T.InstancedMesh(palm, palmMat, palms.length);
       const silhouette = new T.InstancedMesh(
@@ -291,9 +303,9 @@ export async function drawCounty(city: City, group: T.Group) {
         palms.length,
       );
       for (const [i, tree] of palms.entries()) {
-        matrix.position.set(tree.p[0], 0, tree.p[2]);
-        matrix.rotation.set(0, rng() * Math.PI * 2, 0);
-        matrix.scale.setScalar(0.86 + rng() * 0.36);
+        matrix.position.set(tree.p[0], tree.p[1] - tree.s[1] / 2, tree.p[2]);
+        matrix.rotation.set(0, countyStreetTree(tree.p[0], tree.p[2]).yaw, 0);
+        matrix.scale.fromArray(tree.s);
         matrix.updateMatrix();
         instances.setMatrixAt(i, matrix.matrix);
         silhouette.setMatrixAt(i, matrix.matrix);
@@ -309,15 +321,21 @@ export async function drawCounty(city: City, group: T.Group) {
     if (!broadleaf.length) continue;
     const trunks = new T.InstancedMesh(trunkGeo, trunkMat, broadleaf.length),
       leaves = new T.InstancedMesh(crown, leafMat, broadleaf.length);
-    broadleaf.forEach(({ p }, i) => {
-      matrix.position.set(p[0], 1.65, p[2]);
-      matrix.scale.set(1, 1, 1);
+    broadleaf.forEach(({ p, s }, i) => {
+      const base = p[1] - s[1] / 2;
+      const { height, crownBase, crownRadius, yaw, diameter } =
+        countyStreetTree(p[0], p[2]);
+      matrix.position.set(p[0], base, p[2]);
+      matrix.scale.fromArray(s);
+      matrix.rotation.set(0, yaw, 0);
       matrix.updateMatrix();
       trunks.setMatrixAt(i, matrix.matrix);
-      const slim = rng() > 0.65;
-      matrix.position.y = 4.15 + rng() * 0.75;
-      matrix.scale.set(slim ? 1.4 : 2.2, slim ? 2.8 : 2.05, slim ? 1.45 : 2);
-      matrix.rotation.y = rng() * 6.28;
+      matrix.position.y = base + (crownBase + height) / 2;
+      matrix.scale.set(
+        (crownRadius * s[0]) / diameter,
+        (height - crownBase) / 2,
+        ((crownRadius * s[2]) / diameter) * 0.92,
+      );
       matrix.updateMatrix();
       leaves.setMatrixAt(i, matrix.matrix);
     });

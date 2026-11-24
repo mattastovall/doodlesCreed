@@ -250,12 +250,13 @@ export function regionalTrees(plan: CityPlan, limit: number): Box[] {
       for (let col = -5; col <= 5; col++) {
         const u = col * 9.3,
           v = row * 10.7;
+        const h = 4.1 + random() * 1.6;
         plant(
           cx + u * Math.cos(angle) - v * Math.sin(angle),
           cz + u * Math.sin(angle) + v * Math.cos(angle),
           "county-orchard",
-          4 + random() * 0.9,
-          0.4,
+          h,
+          h * 0.07,
           4,
         );
       }
@@ -265,8 +266,11 @@ export function regionalTrees(plan: CityPlan, limit: number): Box[] {
       z = (random() * 2 - 1) * limit;
     const { woods, marsh, slope } = countyHabitat(x, z);
     if (slope > 0.8 || random() > woods * (1 - marsh)) continue;
-    const h = 7 + random() * 9;
-    plant(x, z, "county-pine", h, h * 0.047, 4.2 + h * 0.23);
+    // The sheltered woodland carries mature canopy trees. Exposed ground
+    // and young stands have shorter, more widely visible crowns.
+    const maturity = random();
+    const h = 8 + (11 + 11 * woods) * Math.sqrt(maturity) * (1 - 0.32 * slope);
+    plant(x, z, "county-pine", h, h * 0.032, 4.2 + h * 0.23);
   }
   return trees;
 }

@@ -12,15 +12,52 @@ import {
   elevation,
   LIMIT,
   planCounty,
+  terrainHeight,
   TOWNS,
   type CountyLot,
 } from "./county-plan.ts";
 export { COUNTY, LIMIT, TOWNS, elevation } from "./county-plan.ts";
 
+// The physics box describes the solid stem. The renderer uses the same stem
+// dimensions for both palm LODs and carries the broadleaf crown above traffic.
+export function countyStreetTree(x: number, z: number) {
+  const random = randomSeed(`county-street-tree/${x}/${z}`);
+  const palm = Math.sin(x * 2.7 + z * 0.32) > -0.45;
+  const height = palm ? 10.8 + 4.4 * random() : 8.3 + 3.4 * random();
+  const trunkHeight = height * (palm ? 6.8 / 8.53 : 0.65);
+  const diameter = (palm ? 0.56 : 0.39) + random() * (palm ? 0.15 : 0.17);
+  const crownRadius = palm
+    ? diameter * 9.2
+    : height * (0.26 + random() * 0.066);
+  const crownBase = height * (palm ? 0.57 : 0.45);
+  return {
+    palm,
+    height,
+    trunkHeight,
+    diameter,
+    crownRadius,
+    crownBase,
+    yaw: random() * Math.PI * 2,
+  };
+}
+
 export function countyBlocks(lots = planCounty().lots) {
   const blocks: Box[] = [];
-  for (const { x, z, w, d, choice, variation } of lots) {
-    const lot = cityLot(x, z, choice, variation);
+  const developed = lots.map((parcel) => ({
+    parcel,
+    pieces: cityLot(parcel.x, parcel.z, parcel.choice, parcel.variation),
+  }));
+  for (const {
+    parcel: { x, z, w, d, choice },
+    pieces: lot,
+  } of developed) {
+    // A back-lot tree can face the neighboring parcel's facade. Only inspect
+    // pieces in parcels within a full mature canopy of this planting area.
+    const nearby = developed.filter(
+      ({ parcel: p }) =>
+        Math.abs(x - p.x) <= (w + p.w) / 2 + 12 &&
+        Math.abs(z - p.z) <= (d + p.d) / 2 + 12,
+    );
     blocks.push(...lot);
     for (const [dx, dz] of [
       [-13.8, 10],
@@ -44,9 +81,32 @@ export function countyBlocks(lots = planCounty().lots) {
         )
       )
         continue;
+      const tx = x + dx,
+        tz = z + dz;
+      const tree = countyStreetTree(tx, tz);
+      const { trunkHeight, crownBase, height, crownRadius } = tree;
+      const base = Math.max(0.15, terrainHeight(tx, tz));
+      let clearance = crownRadius;
+      for (const { pieces } of nearby) {
+        for (const b of pieces) {
+          if (
+            b.p[1] + b.s[1] / 2 < base + crownBase ||
+            b.p[1] - b.s[1] / 2 > base + height + 0.1
+          )
+            continue;
+          const u = Math.max(0, Math.abs(tx - b.p[0]) - b.s[0] / 2),
+            v = Math.max(0, Math.abs(tz - b.p[2]) - b.s[2] / 2);
+          if (u < clearance + 0.18 && v < clearance + 0.18)
+            clearance = Math.min(clearance, Math.hypot(u, v) - 0.18);
+        }
+      }
+      // Street trees in narrow courts have a narrower crown and stem; retain
+      // their mature height and the headroom under the first branches.
+      if (clearance <= 0) continue;
+      const diameter = (tree.diameter * clearance) / crownRadius;
       blocks.push({
-        p: [x + dx, 1.5, z + dz],
-        s: [0.35, 3, 0.35],
+        p: [tx, base + trunkHeight / 2, tz],
+        s: [diameter, trunkHeight, diameter],
         kind: "county-tree",
         solid: true,
       });

@@ -17,11 +17,14 @@ export function palmGeometry(distant = false) {
   const rings = distant ? 3 : 24;
   for (let j = 0; j <= rings; j++) {
     const t = j / rings,
-      r = (0.23 - 0.085 * t) * (j % 2 ? 1.09 : 1);
+      r = Math.min(
+        0.23 - 0.035 * t * t,
+        (0.23 - 0.085 * t) * (j % 2 ? 1.09 : 1),
+      );
     bark.setHex(j % 2 ? 0x998776 : 0x766b60);
     for (let i = 0; i < 9; i++) {
       const a = (i * Math.PI * 2) / 9;
-      point(0.35 * t * t + r * Math.cos(a), 6.8 * t, r * Math.sin(a), bark);
+      point(0.035 * t * t + r * Math.cos(a), 6.8 * t, r * Math.sin(a), bark);
       if (j) {
         const lo = (j - 1) * 9 + i,
           next = (j - 1) * 9 + ((i + 1) % 9);
@@ -41,29 +44,29 @@ export function palmGeometry(distant = false) {
     );
     // At this scale a folded blade preserves each arching frond silhouette.
     if (distant) {
-      const start = point(0.35, 6.77, 0, leaf);
+      const start = point(0.035, 6.77, 0, leaf);
       const middle = point(
-        0.35 + dx * len * 0.53,
-        6.77 + lift * 0.8,
+        0.035 + dx * len * 0.53,
+        6.77 + lift * 0.7,
         dz * len * 0.53,
         leaf,
       );
       const left = point(
-        0.35 + dx * len * 0.53 - dz * 0.55,
+        0.035 + dx * len * 0.53 - dz * 0.55,
         6.46 + lift * 0.65,
         dz * len * 0.53 + dx * 0.55,
         leaf,
       );
       const right = point(
-        0.35 + dx * len * 0.53 + dz * 0.55,
+        0.035 + dx * len * 0.53 + dz * 0.55,
         6.46 + lift * 0.65,
         dz * len * 0.53 - dx * 0.55,
         leaf,
       );
       const tip = point(
-        0.35 + dx * len,
+        0.035 + dx * (len + 0.55),
         6.77 + lift * 0.81 - sag,
-        dz * len,
+        dz * (len + 0.55),
         leaf,
       );
       indices.push(
@@ -87,7 +90,7 @@ export function palmGeometry(distant = false) {
     for (let j = 0; j <= 16; j++) {
       const t = j / 16,
         along = t * len,
-        x = 0.35 + dx * along,
+        x = 0.035 + dx * along,
         z = dz * along,
         y = 6.77 + lift * Math.sin(t * Math.PI * 0.7) - sag * t * t;
       const a0 = point(x - dz * 0.025, y, z + dx * 0.025, leaf),
@@ -122,6 +125,8 @@ export function palmGeometry(distant = false) {
   geo.setAttribute("position", new T.Float32BufferAttribute(positions, 3));
   geo.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
   geo.setIndex(indices);
+  // Instance x/z scale is the collider diameter and y scale is trunk height.
+  geo.scale(1 / 0.46, 1 / 6.8, 1 / 0.46);
   geo.computeVertexNormals();
   return geo;
 }

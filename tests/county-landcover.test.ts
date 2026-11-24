@@ -90,6 +90,11 @@ test("far canopy instances preserve every trunk transform at a lower triangle co
     for (const mesh of group.children as InstancedMesh[]) {
       assert.ok(mesh.isInstancedMesh);
       if (mesh.name !== name) continue;
+      mesh.geometry.computeBoundingBox();
+      const bounds = mesh.geometry.boundingBox!;
+      assert.ok(
+        Math.abs(bounds.min.y) < 1e-6 && Math.abs(bounds.max.y - 1) < 1e-6,
+      );
       for (let i = 0; i < mesh.count; i++) {
         mesh.getMatrixAt(i, matrix);
         transforms.push(matrix.elements.join(","));

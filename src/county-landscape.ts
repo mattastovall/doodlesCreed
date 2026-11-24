@@ -19,15 +19,15 @@ function treeShape(pine: boolean, distant = false) {
   add(
     new T.CylinderGeometry(
       0.012,
-      pine ? 0.024 : 0.045,
+      pine ? 0.016 : 0.035,
       0.82,
       distant ? 4 : 7,
     ).translate(0, 0.41, 0),
     0x776a57,
   );
   if (distant && pine) {
-    add(new T.ConeGeometry(0.225, 0.58, 6).translate(0, 0.43, 0), 0x476858);
-    add(new T.ConeGeometry(0.145, 0.55, 6).translate(0, 0.75, 0), 0x668968);
+    add(new T.ConeGeometry(0.184, 0.53, 6).translate(0, 0.49, 0), 0x476858);
+    add(new T.ConeGeometry(0.123, 0.48, 6).translate(0, 0.76, 0), 0x668968);
   } else if (distant) {
     add(
       new T.SphereGeometry(1, 7, 4)
@@ -37,8 +37,8 @@ function treeShape(pine: boolean, distant = false) {
     );
   } else if (pine) {
     for (let layer = 0; layer < 5; layer++) {
-      const height = 0.37 - layer * 0.02,
-        radius = 0.21 - layer * 0.029;
+      const height = 0.34 - layer * 0.016,
+        radius = 0.157 - layer * 0.021;
       const geo = new T.ConeGeometry(radius, height, 13, 2);
       const pos = geo.attributes.position;
       for (let i = 0; i < pos.count; i++) {
@@ -55,7 +55,7 @@ function treeShape(pine: boolean, distant = false) {
           z * scale,
         );
       }
-      geo.rotateY(layer * 1.72).translate(0, 0.3 + layer * 0.15, 0);
+      geo.rotateY(layer * 1.72).translate(0, 0.38 + layer * 0.128, 0);
       geo.computeVertexNormals();
       add(geo, [0x37594e, 0x476858, 0x53755d, 0x668968, 0x70926d][layer]);
     }
@@ -73,6 +73,9 @@ function treeShape(pine: boolean, distant = false) {
   }
   const geo = mergeGeometries(pieces)!;
   for (const piece of pieces) piece.dispose();
+  // Both detail levels use the same metric height, including the crown tip.
+  geo.computeBoundingBox();
+  geo.scale(1, 1 / geo.boundingBox!.max.y, 1);
   return geo;
 }
 
