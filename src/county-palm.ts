@@ -3,7 +3,7 @@ import { randomSeed } from "./world.ts";
 
 // A single opaque mesh per silhouette. Leaflets are folded along their midrib
 // so they catch sunlight on opposite faces without alpha sorting or overdraw.
-export function palmGeometry() {
+export function palmGeometry(distant = false) {
   const positions: number[] = [],
     colors: number[] = [],
     indices: number[] = [];
@@ -14,8 +14,9 @@ export function palmGeometry() {
     return positions.length / 3 - 1;
   }
   const bark = new T.Color();
-  for (let j = 0; j <= 24; j++) {
-    const t = j / 24,
+  const rings = distant ? 3 : 24;
+  for (let j = 0; j <= rings; j++) {
+    const t = j / rings,
       r = (0.23 - 0.085 * t) * (j % 2 ? 1.09 : 1);
     bark.setHex(j % 2 ? 0x998776 : 0x766b60);
     for (let i = 0; i < 9; i++) {
@@ -38,6 +39,49 @@ export function palmGeometry() {
     const leaf = new T.Color().setHex(
       [0x477156, 0x628361, 0x698751, 0x366b55][k % 4],
     );
+    // At this scale a folded blade preserves each arching frond silhouette.
+    if (distant) {
+      const start = point(0.35, 6.77, 0, leaf);
+      const middle = point(
+        0.35 + dx * len * 0.53,
+        6.77 + lift * 0.8,
+        dz * len * 0.53,
+        leaf,
+      );
+      const left = point(
+        0.35 + dx * len * 0.53 - dz * 0.55,
+        6.46 + lift * 0.65,
+        dz * len * 0.53 + dx * 0.55,
+        leaf,
+      );
+      const right = point(
+        0.35 + dx * len * 0.53 + dz * 0.55,
+        6.46 + lift * 0.65,
+        dz * len * 0.53 - dx * 0.55,
+        leaf,
+      );
+      const tip = point(
+        0.35 + dx * len,
+        6.77 + lift * 0.81 - sag,
+        dz * len,
+        leaf,
+      );
+      indices.push(
+        start,
+        left,
+        middle,
+        start,
+        middle,
+        right,
+        left,
+        tip,
+        middle,
+        middle,
+        tip,
+        right,
+      );
+      continue;
+    }
     let lastA = 0,
       lastB = 0;
     for (let j = 0; j <= 16; j++) {

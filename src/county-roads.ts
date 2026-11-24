@@ -1,6 +1,6 @@
 import * as T from "three";
 import type { Street } from "./city-plan.ts";
-import { alongStreet, ruralRoad } from "./county-plan.ts";
+import { alongStreet, ruralRoad, terrainHeight } from "./county-plan.ts";
 import type { V3 } from "./world.ts";
 
 // The shoulders, crossings, light poles and lanes all use the same surveyed
@@ -34,6 +34,54 @@ export function drawCountyRoads(
           urban: !ruralRoad(street),
         });
     }
+  // Regional grades change at terrain grid rows. Split painted surfaces at
+  // those rows so the asphalt, shoulder and lines sit on the collision mesh.
+  function pavedPolygon(
+    out: number[],
+    points: V3[],
+    offset: number,
+    graded: boolean,
+  ) {
+    function emit(poly: V3[]) {
+      for (let i = 2; i < poly.length; i++)
+        for (const p of [poly[0], poly[i - 1], poly[i]])
+          out.push(
+            p[0],
+            offset + (graded ? terrainHeight(p[0], p[2]) : p[1]),
+            p[2],
+          );
+    }
+    if (!graded) {
+      emit(points);
+      return;
+    }
+    let polygon = points;
+    const zs = points.map((p) => p[2]),
+      end = Math.max(...zs);
+    for (
+      let z = (Math.floor(Math.min(...zs) / 20) + 1) * 20;
+      z < end;
+      z += 20
+    ) {
+      const below: V3[] = [],
+        above: V3[] = [];
+      for (let i = 0; i < polygon.length; i++) {
+        const a = polygon[i],
+          b = polygon[(i + 1) % polygon.length];
+        if (a[2] <= z) below.push(a);
+        if (a[2] >= z) above.push(a);
+        if ((a[2] < z && b[2] > z) || (a[2] > z && b[2] < z)) {
+          const t = (z - a[2]) / (b[2] - a[2]);
+          const p: V3 = [a[0] + (b[0] - a[0]) * t, 0, z];
+          below.push(p);
+          above.push(p);
+        }
+      }
+      emit(below);
+      polygon = above;
+    }
+    emit(polygon);
+  }
   function strip(
     out: number[],
     s: Street,
@@ -47,22 +95,21 @@ export function drawCountyRoads(
       b = alongStreet(s, to, left),
       c = alongStreet(s, to, right),
       d = alongStreet(s, from, right);
-    for (const p of [a, b, c, a, c, d]) out.push(p[0], y, p[2]);
+    pavedPolygon(out, [a, b, c, d], y, s.id.startsWith("county-road-regional"));
   }
-  function circle(out: number[], p: V3, r: number, y: number) {
+  function circle(out: number[], p: V3, r: number, y: number, graded: boolean) {
     for (let i = 0; i < 16; i++) {
       const a = (i * Math.PI) / 8,
         b = ((i + 1) * Math.PI) / 8;
-      out.push(
-        p[0],
+      pavedPolygon(
+        out,
+        [
+          p,
+          [p[0] + Math.cos(b) * r, p[1], p[2] + Math.sin(b) * r],
+          [p[0] + Math.cos(a) * r, p[1], p[2] + Math.sin(a) * r],
+        ],
         y,
-        p[2],
-        p[0] + Math.cos(b) * r,
-        y,
-        p[2] + Math.sin(b) * r,
-        p[0] + Math.cos(a) * r,
-        y,
-        p[2] + Math.sin(a) * r,
+        graded,
       );
     }
   }
@@ -146,9 +193,10 @@ export function drawCountyRoads(
       if (s.class === "arterial") lamps.push(alongStreet(s, 0.74, -half - 1));
     }
   }
-  for (const { p, width, urban } of junctions.values()) {
-    circle(shoulders, p, width / 2 + (urban ? 1.45 : 0.85), 0.035);
-    circle(asphalt, p, width / 2, 0.048);
+  for (const { p, width, urban, arms } of junctions.values()) {
+    const graded = arms.some((s) => s.id.startsWith("county-road-regional"));
+    circle(shoulders, p, width / 2 + (urban ? 1.45 : 0.85), 0.035, graded);
+    circle(asphalt, p, width / 2, 0.048, graded);
   }
   for (const [positions, tint] of [
     [shoulders, 0xffffff],

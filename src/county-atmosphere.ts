@@ -1,6 +1,10 @@
 import * as T from "three";
 import { assetUrl } from "./release-info.ts";
 
+// Thin coastal haze keeps landmarks legible across the valley. The far plane
+// includes the scenic ridges even when seen from the opposite county corner.
+export const countyView = { haze: 0xb6b6bc, density: 0.0006, far: 7000 };
+
 // The sunset in coastal-sky.jpg sits at (0.311, 0.477) from the top left.
 const azimuth = (0.311 - 0.5) * 2 * Math.PI;
 const altitude = (0.5 - 0.477) * Math.PI;

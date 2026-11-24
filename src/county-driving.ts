@@ -4,7 +4,7 @@ import {
 } from "./county-pedestrian-collision.ts";
 import { Box3, Matrix4, Quaternion, Vector3 } from "three";
 import { OBB } from "three/examples/jsm/math/OBB.js";
-import { elevation, LIMIT } from "./county-plan.ts";
+import { terrainHeight as terrain, LIMIT } from "./county-plan.ts";
 import { contactParts } from "./county-rubble.ts";
 import type { RubbleCluster } from "./county-wreckage.ts";
 import type { CountyCar, VehicleKind } from "./county.ts";
@@ -48,19 +48,6 @@ const massKg: Record<VehicleKind, number> = {
 };
 const CELL = 8;
 const key = (x: number, z: number) => x * 4096 + z;
-// Match the County's 20 m triangles, including the diagonal through each square.
-function terrain(x: number, z: number) {
-  const left = Math.floor(x / 20) * 20,
-    top = Math.floor(z / 20) * 20;
-  const u = (x - left) / 20,
-    v = (z - top) / 20;
-  const b = elevation(left + 20, top),
-    c = elevation(left, top + 20);
-  return u + v < 1
-    ? (1 - u - v) * elevation(left, top) + u * b + v * c
-    : (u + v - 1) * elevation(left + 20, top + 20) + (1 - v) * b + (1 - u) * c;
-}
-
 const vector = (p: V3) => new Vector3(...p);
 const axisY = new Vector3(0, 1, 0);
 export class CountyDriveWorld {

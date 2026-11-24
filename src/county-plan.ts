@@ -3,7 +3,134 @@ import type { CityPlan, NeighborhoodId, Street } from "./city-plan.ts";
 
 export const COUNTY = "switchback-county";
 export const TOWNS = [-320, 320];
-export const LIMIT = 800;
+export const LIMIT = 1120;
+export const COUNTY_SETTLEMENTS = [
+  {
+    id: "saltbrush",
+    name: "Saltbrush Junction",
+    x: -810,
+    z: -820,
+    biome: "desert",
+  },
+  { id: "red-mesa", name: "Red Mesa", x: 780, z: -820, biome: "mesa" },
+  { id: "laurel", name: "Laurel Grove", x: 0, z: 880, biome: "woodland" },
+] as const;
+type XZ = [number, number];
+const westGate: XZ = [-790, valleyZ(-790)],
+  eastGate: XZ = [790, valleyZ(790)];
+// Each loop enters the settlement on its main street. The northern freight
+// road cuts between two mesas; the southern ridge route returns via the grove.
+const controlTracks: XZ[][] = [
+  [
+    westGate,
+    [-940, -145],
+    [-990, -365],
+    [-922, -485],
+    [-953, -610],
+    [-935, -745],
+    [-906, -820],
+  ],
+  [
+    [-714, -820],
+    [-490, -900],
+    [-260, -875],
+    [-80, -735],
+    [155, -685],
+    [340, -752],
+    [560, -856],
+    [684, -820],
+  ],
+  [
+    [876, -820],
+    [990, -715],
+    [1008, -480],
+    [892, -365],
+    [955, -245],
+    [906, -120],
+    eastGate,
+  ],
+  [
+    westGate,
+    [-905, 155],
+    [-810, 345],
+    [-605, 420],
+    [-470, 565],
+    [-490, 657],
+    [-346, 790],
+    [-96, 880],
+  ],
+  [
+    [96, 880],
+    [345, 829],
+    [517, 710],
+    [467, 615],
+    [610, 490],
+    [833, 400],
+    [940, 228],
+    eastGate,
+  ],
+];
+// Round surveyed bends before cutting the terrain corridor. The road paint,
+// civilian routes and terrain all follow this same sampled centerline.
+function roundBends(track: XZ[]): XZ[] {
+  const points = [track[0]];
+  for (let i = 1; i < track.length - 1; i++) {
+    const prev = track[i - 1],
+      corner = track[i],
+      next = track[i + 1];
+    const before = Math.hypot(prev[0] - corner[0], prev[1] - corner[1]);
+    const after = Math.hypot(next[0] - corner[0], next[1] - corner[1]);
+    const trim = Math.min(65, before * 0.36, after * 0.36);
+    const a: XZ = [
+      corner[0] + ((prev[0] - corner[0]) * trim) / before,
+      corner[1] + ((prev[1] - corner[1]) * trim) / before,
+    ];
+    const b: XZ = [
+      corner[0] + ((next[0] - corner[0]) * trim) / after,
+      corner[1] + ((next[1] - corner[1]) * trim) / after,
+    ];
+    for (let j = 0; j <= 5; j++) {
+      const t = j / 5,
+        u = 1 - t;
+      points.push([
+        u * u * a[0] + 2 * u * t * corner[0] + t * t * b[0],
+        u * u * a[1] + 2 * u * t * corner[1] + t * t * b[1],
+      ]);
+    }
+  }
+  points.push(track[track.length - 1]);
+  return points;
+}
+const countyTracks = controlTracks.map(roundBends);
+const gradeBreaks = [-740, -560, -400, -160, -60, 60, 220, 440, 580, 760];
+const grades = [0, 17, 26, 8, 0, 0, 11, 32, 19, 0];
+function routeGrade(z: number) {
+  for (let i = 1; i < gradeBreaks.length; i++)
+    if (z >= gradeBreaks[i - 1] && z <= gradeBreaks[i])
+      return (
+        grades[i - 1] +
+        ((grades[i] - grades[i - 1]) * (z - gradeBreaks[i - 1])) /
+          (gradeBreaks[i] - gradeBreaks[i - 1])
+      );
+  return 0;
+}
+const trackEdges = countyTracks.flatMap((track) =>
+  track.slice(1).map((b, i) => {
+    const a = track[i],
+      dx = b[0] - a[0],
+      dz = b[1] - a[1];
+    return {
+      a,
+      dx,
+      dz,
+      len2: dx * dx + dz * dz,
+      minX: Math.min(a[0], b[0]) - 145,
+      maxX: Math.max(a[0], b[0]) + 145,
+      minZ: Math.min(a[1], b[1]) - 145,
+      maxZ: Math.max(a[1], b[1]) + 145,
+    };
+  }),
+);
 
 // The valley floor sets the course of the county road even beyond the towns.
 function valleyZ(x: number) {
@@ -22,7 +149,73 @@ export function elevation(x: number, z: number) {
     ),
   );
   const hills = Math.min(1, valleyShoulder, townShoulder);
-  return hills * hills * (38 + 23 * Math.sin(x / 93) + 15 * Math.cos(z / 72));
+  const oldHills =
+    hills * hills * (38 + 23 * Math.sin(x / 93) + 15 * Math.cos(z / 72));
+  if (hills === 0 && Math.abs(x) < 600 && Math.abs(z) < 220) return oldHills;
+  let distance = 145;
+  for (const town of COUNTY_SETTLEMENTS)
+    distance = Math.min(
+      distance,
+      Math.hypot(
+        Math.max(0, Math.abs(town.x - x) - 125),
+        Math.max(
+          0,
+          z - town.z - 92,
+          town.z - z - (town.id === "red-mesa" ? 240 : 92),
+        ),
+      ),
+    );
+  for (const e of trackEdges) {
+    if (x < e.minX || x > e.maxX || z < e.minZ || z > e.maxZ) continue;
+    const u = Math.max(
+      0,
+      Math.min(1, ((x - e.a[0]) * e.dx + (z - e.a[1]) * e.dz) / e.len2),
+    );
+    distance = Math.min(
+      distance,
+      Math.hypot(x - e.a[0] - e.dx * u, z - e.a[1] - e.dz * u),
+    );
+  }
+  const t = Math.max(0, Math.min(1, (distance - 42) / 103));
+  const blend = t * t * (3 - 2 * t);
+  const mesa = (cx: number, cz: number, rx: number, rz: number) => {
+    const slope = Math.max(
+      0,
+      Math.min(1, (1 - Math.hypot((x - cx) / rx, (z - cz) / rz)) * 3),
+    );
+    return slope * slope * (3 - 2 * slope);
+  };
+  const relief =
+    96 * mesa(420, -520, 300, 185) +
+    96 * Math.exp(-(((x + 120) / 410) ** 2 + ((z - 540) / 150) ** 2)) +
+    70 * mesa(-620, -560, 220, 150);
+  return routeGrade(z) * (1 - blend) + (oldHills + hills * relief) * blend;
+}
+
+// Shared sampling follows the exact diagonal used by the terrain collider.
+const terrainSamples = new Map<number, number>();
+function sampledElevation(x: number, z: number) {
+  if (Math.abs(x) > LIMIT || Math.abs(z) > LIMIT) return elevation(x, z);
+  const key = ((x + LIMIT) / 20) * ((2 * LIMIT) / 20 + 1) + (z + LIMIT) / 20;
+  let height = terrainSamples.get(key);
+  if (height === undefined) {
+    height = elevation(x, z);
+    terrainSamples.set(key, height);
+  }
+  return height;
+}
+export function terrainHeight(x: number, z: number) {
+  const left = Math.floor(x / 20) * 20,
+    top = Math.floor(z / 20) * 20;
+  const u = (x - left) / 20,
+    v = (z - top) / 20;
+  const b = sampledElevation(left + 20, top),
+    c = sampledElevation(left, top + 20);
+  return u + v < 1
+    ? (1 - u - v) * sampledElevation(left, top) + u * b + v * c
+    : (u + v - 1) * sampledElevation(left + 20, top + 20) +
+        (1 - v) * b +
+        (1 - u) * c;
 }
 
 export interface CountyLot {
@@ -32,6 +225,7 @@ export interface CountyLot {
   w: number;
   d: number;
   choice: number;
+  parkingChoice?: number;
   variation: number;
   front: Street;
   side: Street;
@@ -44,7 +238,9 @@ export function alongStreet(s: Street, t: number, offset = 0): V3 {
     length = Math.hypot(dx, dz);
   return [
     s.a[0] + dx * t - (dz / length) * offset,
-    0,
+    s.id.startsWith("county-road-regional")
+      ? routeGrade(s.a[2] + dz * t + (dx / length) * offset)
+      : s.a[1] + (s.b[1] - s.a[1]) * t,
     s.a[2] + dz * t + (dx / length) * offset,
   ];
 }
@@ -78,6 +274,39 @@ function rowBoundaries(west: boolean, row: number, xs: number[], seed: string) {
   }
   boundaries.push(end);
   return boundaries;
+}
+
+const lotKinds = [
+  "works",
+  "rowhouses",
+  "arcade",
+  "cinema",
+  "exchange",
+  "hall",
+  "square",
+  "bungalows",
+  "motor-court",
+  "service-station",
+  "walkup",
+  "ore-headframe",
+  "fire-lookout",
+];
+function lotFloors(choice: number, variation: number) {
+  return [
+    2,
+    2,
+    4 + Math.floor(variation * 3),
+    3,
+    7 + 2 * Math.floor(variation * 3),
+    5,
+    1,
+    1,
+    2,
+    1,
+    3 + Math.floor(variation * 3),
+    4,
+    5,
+  ][choice];
 }
 
 export function planCounty(seed = COUNTY) {
@@ -199,7 +428,7 @@ export function planCounty(seed = COUNTY) {
             : Math.abs(j - 3) < 2
               ? [4, 4, 2, 2, 3]
               : [1, 1, 2, 3];
-          const choice =
+          const parkingChoice =
             landmark === "hall"
               ? 5
               : landmark === "market"
@@ -207,6 +436,16 @@ export function planCounty(seed = COUNTY) {
                 : landmark === "cinema"
                   ? 3
                   : palette[Math.floor(rand() * palette.length)];
+          const choice =
+            !landmark && (j === 0 || j === 5) && (start + n) % 2 === 0
+              ? west
+                ? j === 0
+                  ? 8
+                  : 9
+                : j === 0
+                  ? 7
+                  : 10
+              : parkingChoice;
           // Inscribe the paved apron between the four road rights-of-way. The
           // separating axis projects the axis-aligned pad onto each road normal.
           let w = Math.min(45, Math.abs(front.b[0] - front.a[0]) - 13),
@@ -233,6 +472,7 @@ export function planCounty(seed = COUNTY) {
             w,
             d,
             choice,
+            parkingChoice,
             variation: rand(),
             front,
             side: n === 0 ? left : right,
@@ -249,24 +489,8 @@ export function planCounty(seed = COUNTY) {
             facing: 0,
             streetId: front.id,
             neighborhood,
-            kind: [
-              "works",
-              "rowhouses",
-              "arcade",
-              "cinema",
-              "exchange",
-              "hall",
-              "square",
-            ][choice],
-            floors: [
-              2,
-              2,
-              4 + Math.floor(lot.variation * 3),
-              3,
-              7 + 2 * Math.floor(lot.variation * 3),
-              5,
-              1,
-            ][choice],
+            kind: lotKinds[choice],
+            floors: lotFloors(choice, lot.variation),
           });
           if (landmark)
             plan.landmarks.push({
@@ -297,6 +521,189 @@ export function planCounty(seed = COUNTY) {
   highway([-790, 0, valleyZ(-790)], gateways[0]);
   highway(gateways[1], gateways[2]);
   highway(gateways[3], [790, 0, valleyZ(790)]);
+  function street(id: string, a: XZ, b: XZ, width: number, arterial: boolean) {
+    const road: Street = {
+      id,
+      a: [a[0], routeGrade(a[1]), a[1]],
+      b: [b[0], routeGrade(b[1]), b[1]],
+      width,
+      class: arterial ? "arterial" : "local",
+    };
+    plan.streets.push(road);
+    return road;
+  }
+  for (const [r, track] of countyTracks.entries()) {
+    for (let i = 1; i < track.length; i++) {
+      const a = track[i - 1],
+        b = track[i],
+        dx = b[0] - a[0],
+        dz = b[1] - a[1];
+      const steps = Math.ceil(Math.hypot(dx, dz) / 65);
+      const ts = Array.from({ length: steps }, (_, j) => (j + 1) / steps);
+      for (const z of gradeBreaks) {
+        const t = (z - a[1]) / dz;
+        if (t > 0 && t < 1) ts.push(t);
+      }
+      let prev = a;
+      for (const [j, t] of [...new Set(ts)].sort((a, b) => a - b).entries()) {
+        const next: XZ = t === 1 ? b : [a[0] + dx * t, a[1] + dz * t];
+        street(`county-road-regional-${r}-${i}-${j}`, prev, next, 11, true);
+        prev = next;
+      }
+    }
+  }
+  for (const place of COUNTY_SETTLEMENTS) {
+    const { x, z, id } = place;
+    const rand = randomSeed(seed + id);
+    // Two parallel back streets make eight frontages and a local driving loop.
+    const designs =
+      id === "saltbrush"
+        ? [0, 8, 9, 7, 1, 8, 2, 0]
+        : id === "red-mesa"
+          ? [9, 11, 8, 1, 7, 0, 2, 7]
+          : [7, 10, 8, 12, 1, 7, 9, 10];
+    for (let i = 0; i < 4; i++) {
+      const left = x - 96 + i * 48,
+        right = left + 48;
+      const front = street(`${id}-main-${i}`, [left, z], [right, z], 12, true);
+      for (const [j, sign] of [-1, 1].entries()) {
+        const endZ = z + sign * 56;
+        const side = street(
+          `${id}-side-${i}-${j}`,
+          [left, z],
+          [left, endZ],
+          8,
+          false,
+        );
+        street(`${id}-back-${i}-${j}`, [left, endZ], [right, endZ], 8, false);
+        if (i === 3)
+          street(`${id}-side-end-${j}`, [right, z], [right, endZ], 8, false);
+        develop(
+          front,
+          side,
+          left,
+          right,
+          z,
+          endZ,
+          designs[i + 4 * j],
+          `block-${i}-${j}`,
+          id === "laurel" ? "heights" : "works",
+        );
+      }
+    }
+
+    if (id === "red-mesa") {
+      // The freight road backs onto a wider boulevard. Shorter successive
+      // rows form the civic square, exchange frontage and northern court.
+      const rows = [
+        { first: 0, designs: [0, 5, 6, 4], depth: 58 },
+        { first: 1, designs: [2, 4, 10], depth: 62 },
+        { first: 1, designs: [1, 3], depth: 54 },
+      ];
+      let south = z - 56;
+      for (const [row, layout] of rows.entries()) {
+        const north = south - layout.depth;
+        for (const [col, choice] of layout.designs.entries()) {
+          const left = x - 96 + (layout.first + col) * 48,
+            right = left + 48;
+          const front = street(
+            `${id}-civic-ave-${row}-${col}`,
+            [left, north],
+            [right, north],
+            row === 0 ? 14 : 9,
+            row === 0,
+          );
+          const side = street(
+            `${id}-civic-side-${row}-${col}`,
+            [left, south],
+            [left, north],
+            col === 1 ? 11 : 8,
+            false,
+          );
+          if (col === layout.designs.length - 1)
+            street(
+              `${id}-civic-end-${row}`,
+              [right, south],
+              [right, north],
+              8,
+              false,
+            );
+          const lot = develop(
+            front,
+            side,
+            left,
+            right,
+            south,
+            north,
+            choice,
+            `civic-${row}-${col}`,
+            choice === 0 ? "works" : "market",
+          );
+          if (choice === 6)
+            plan.landmarks.push({
+              id: "red-mesa-civic-square",
+              p: [lot.x, 0, lot.z],
+              size: [lot.w, 0, lot.d],
+            });
+        }
+        south = north;
+      }
+    }
+
+    function develop(
+      front: Street,
+      side: Street,
+      left: number,
+      right: number,
+      startZ: number,
+      endZ: number,
+      choice: number,
+      suffix: string,
+      neighborhood: NeighborhoodId,
+    ) {
+      const blockId = id + "-" + suffix;
+      const lot = {
+        town: x,
+        x: (left + right) / 2,
+        z: (startZ + endZ) / 2,
+        w: right - left - 11,
+        d: Math.abs(endZ - startZ) - 15,
+        front,
+        side,
+        choice,
+        variation: rand(),
+      };
+      lots.push(lot);
+      plan.blocks.push({
+        id: blockId,
+        minX: left,
+        maxX: right,
+        minZ: Math.min(startZ, endZ),
+        maxZ: Math.max(startZ, endZ),
+        neighborhood,
+      });
+      if (choice === 11 || choice === 12)
+        plan.landmarks.push({
+          id: id + "-" + lotKinds[choice],
+          p: [lot.x, 0, lot.z],
+          size: [lot.w, 28, lot.d],
+        });
+      plan.parcels.push({
+        id: blockId + "-p0",
+        blockId,
+        x: lot.x,
+        z: lot.z,
+        w: lot.w,
+        d: lot.d,
+        facing: 0,
+        streetId: front.id,
+        neighborhood,
+        kind: lotKinds[choice],
+        floors: lotFloors(choice, lot.variation),
+      });
+      return lot;
+    }
+  }
   return { plan, lots };
 }
 
@@ -323,7 +730,7 @@ export function countyRoutes(streets: Street[]) {
       let previous = a;
       for (const t of [0.28, 0.53, 0.76]) {
         const p = alongStreet(s, t, sign * (s.width / 2 - 0.65));
-        p[1] = 0.07;
+        p[1] += 0.07;
         const i = nodes.push(p) - 1;
         links.push([previous, i]);
         previous = i;

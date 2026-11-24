@@ -1,4 +1,17 @@
-import { countySky, countyTextures, coastSun } from "./county-atmosphere.ts";
+import { drawRegionalLandscape } from "./county-landscape.ts";
+import {
+  countySky,
+  countyTextures,
+  coastSun,
+  panoramaSampling,
+} from "./county-atmosphere.ts";
+import {
+  clearOfLotsAndRoads,
+  dryCountry,
+  landColor,
+} from "./county-landcover.ts";
+import { terrainHeight } from "./county-plan.ts";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { palmGeometry } from "./county-palm.ts";
 import { loadFleet } from "./county-car.ts";
 import { isCountyPiece } from "./county-architecture.ts";
@@ -11,6 +24,70 @@ import { elevation, countyCars } from "./county.ts";
 import { drawCountyRoads } from "./county-roads.ts";
 import { randomSeed, type City } from "./world.ts";
 
+// At the playable edge the first ring shares every 20 m terrain vertex.
+// Wider bands beyond it give the skyline parallax at a fixed geometry cost.
+function outerRidges(limit: number) {
+  const vertices: number[] = [],
+    indices: number[] = [];
+  const side = (2 * limit) / 20,
+    perimeter = 4 * side;
+  for (const offset of [
+    0, 45, 120, 225, 390, 600, 840, 1130, 1520, 1920, 2350,
+  ]) {
+    const extent = limit + offset;
+    for (let i = 0; i < perimeter; i++) {
+      const t = ((i % side) / side) * 2 - 1,
+        edge = Math.floor(i / side);
+      const x = extent * [t, 1, -t, -1][edge],
+        z = extent * [-1, t, 1, -t][edge];
+      const swell =
+        Math.sin(x / 210 + z / 420) * 0.5 +
+        Math.cos(z / 172 - x / 380) * 0.3 +
+        Math.sin(x / 81 + z / 97) * 0.2;
+      const crest =
+        Math.exp(-(((offset - 610 - swell * 180) / 270) ** 2)) *
+          (120 + swell * 103) +
+        Math.exp(-(((offset - 1420 + swell * 210) / 380) ** 2)) *
+          (225 + swell * 170);
+      const blend = Math.min(1, offset / 225);
+      vertices.push(
+        x,
+        elevation(x, z) * (1 - blend) + (30 + swell * 24 + crest) * blend,
+        z,
+      );
+      if (offset) {
+        const j = vertices.length / 3 - 1,
+          k = i + 1 === perimeter ? j + 1 - perimeter : j + 1;
+        indices.push(j - perimeter, k - perimeter, j, k - perimeter, k, j);
+      }
+    }
+  }
+  return { vertices, indices };
+}
+
+function groundGeometry(vertices: number[], indices: number[]) {
+  const geo = new T.BufferGeometry();
+  geo.setAttribute("position", new T.Float32BufferAttribute(vertices, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  const uv: number[] = [],
+    colors: number[] = [],
+    dry: number[] = [];
+  const tint = new T.Color();
+  for (let i = 0; i < vertices.length; i += 3) {
+    const x = vertices[i],
+      z = vertices[i + 2];
+    uv.push(x / 18, z / 18);
+    tint.setHex(landColor(x, z));
+    colors.push(tint.r, tint.g, tint.b);
+    dry.push(dryCountry(x, z));
+  }
+  geo.setAttribute("uv", new T.Float32BufferAttribute(uv, 2));
+  geo.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
+  geo.setAttribute("dry", new T.Float32BufferAttribute(dry, 1));
+  return geo;
+}
+
 export async function drawCounty(city: City, group: T.Group) {
   const loader = new GLTFLoader();
   async function geometry(name: string) {
@@ -22,7 +99,61 @@ export async function drawCounty(city: City, group: T.Group) {
     return geo;
   }
   const textures = await countyTextures();
-  const terrainTint = new T.MeshLambertMaterial({ map: textures.scrubland });
+  const terrainTint = new T.MeshLambertMaterial({
+    map: textures.scrubland,
+    vertexColors: true,
+  });
+  terrainTint.onBeforeCompile = (shader) => {
+    shader.uniforms.panorama = { value: textures.sky };
+    shader.vertexShader =
+      "attribute float dry; varying float vDry; varying vec3 vTerrain;\n" +
+      shader.vertexShader.replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\nvDry=dry; vTerrain=(modelMatrix*vec4(position,1.)).xyz;",
+      );
+    shader.fragmentShader =
+      "varying float vDry; varying vec3 vTerrain; uniform sampler2D panorama;\n" +
+      panoramaSampling +
+      "\n" +
+      shader.fragmentShader
+        .replace(
+          "#include <map_fragment>",
+          `
+      // Warp the fine repeat with a second, broader rock/scrub pattern.
+      vec3 broadPattern = texture2D(map, mat2(.78,-.62,.62,.78)*vMapUv*.19).rgb;
+      vec3 scrub = texture2D(map, vMapUv + broadPattern.rb*.24).rgb;
+      float eyeDistance = length(vTerrain-cameraPosition);
+      scrub = mix(scrub,broadPattern,.24+.50*smoothstep(55.,450.,eyeDistance));
+      float grain = dot(scrub, vec3(.21,.72,.07));
+      vec3 sand = vec3(.34 + .98 * grain);
+      vec3 surfaceNormal = normalize(cross(dFdx(vTerrain),dFdy(vTerrain)));
+      float exposure = smoothstep(.18,.65,length(surfaceNormal.xz))
+                     * (1.-smoothstep(460.,1300.,eyeDistance));
+      // Eroded beds follow the hillside; the gently tilted layers pinch
+      // and thicken around outcropping rock instead of striping the flats.
+      float bed = vTerrain.y + .018*vTerrain.x + 2.4*sin(vTerrain.z*.014)
+                + 1.2*sin(vTerrain.x*.027) + 1.7*broadPattern.r;
+      float shelf = .5+.5*sin(bed*.88+.82*sin(bed*.36));
+      float seam = smoothstep(.68,.95,shelf)*(1.-smoothstep(.15,1.2,fwidth(bed)));
+      sand *= mix(vec3(1.),vec3(.99,.81,.69)*(1.-.23*seam),exposure);
+      diffuseColor.rgb *= mix(scrub, sand, vDry);
+    `,
+        )
+        .replace(
+          "#include <fog_fragment>",
+          `
+      vec3 sight=vTerrain-cameraPosition;
+      float distanceToEye=length(sight);
+      float haze=1.-exp(-pow(fogDensity * distanceToEye,2.));
+      vec3 air=fogColor;
+      if (distanceToEye>700.) {
+        vec3 horizon=samplePanorama(panorama,normalize(vec3(sight.x,.012*length(sight.xz),sight.z)));
+        air=mix(air,horizon,smoothstep(700.,2800.,distanceToEye)*.88);
+      }
+      gl_FragColor.rgb=mix(gl_FragColor.rgb,air,haze);
+    `,
+        );
+  };
   const normal = new T.Vector3(),
     sun = coastSun;
   group.add(countySky(textures.sky));
@@ -32,9 +163,9 @@ export async function drawCounty(city: City, group: T.Group) {
     geometry("lamp"),
     geometry("outcrop"),
   ]);
+  const terrainCells = new Map<string, T.BufferGeometry[]>();
   for (const box of city.boxes) {
     if (box.kind !== "ground") continue;
-    const geo = new T.BufferGeometry();
     const [cx, cy, cz] = box.p,
       [w, h, d] = box.s;
     const vertices = box.mesh?.vertices ?? [
@@ -51,17 +182,24 @@ export async function drawCounty(city: City, group: T.Group) {
       cy + h / 2,
       cz - d / 2,
     ];
-    geo.setAttribute("position", new T.Float32BufferAttribute(vertices, 3));
-    geo.setIndex(box.mesh?.indices ?? [0, 1, 2, 0, 2, 3]);
-    geo.computeVertexNormals();
-    const uv: number[] = [];
-    for (let i = 0; i < vertices.length; i += 3)
-      uv.push(vertices[i] / 18, vertices[i + 2] / 18);
-    geo.setAttribute("uv", new T.Float32BufferAttribute(uv, 2));
-    const hill = new T.Mesh(geo, terrainTint);
+    const geo = groundGeometry(
+      vertices,
+      box.mesh?.indices ?? [0, 1, 2, 0, 2, 3],
+    );
+    const cell = Math.floor(cx / 480) + "," + Math.floor(cz / 480);
+    if (!terrainCells.has(cell)) terrainCells.set(cell, []);
+    terrainCells.get(cell)!.push(geo);
+  }
+  for (const tiles of terrainCells.values()) {
+    const hill = new T.Mesh(mergeGeometries(tiles)!, terrainTint);
     hill.receiveShadow = true;
     group.add(hill);
+    tiles.forEach((tile) => tile.dispose());
   }
+  const ridge = outerRidges(city.bounds);
+  group.add(
+    new T.Mesh(groundGeometry(ridge.vertices, ridge.indices), terrainTint),
+  );
   const cars = countyCars().map((c, i) => {
     const m = vehicle(
       c.kind,
@@ -73,6 +211,7 @@ export async function drawCounty(city: City, group: T.Group) {
     group.add(m);
     return m;
   });
+  drawRegionalLandscape(group, city);
   const lightPositions = drawCountyRoads(group, city.plan.streets, textures);
   const rng = randomSeed("county-landscape");
   const matrix = new T.Object3D();
@@ -115,6 +254,7 @@ export async function drawCounty(city: City, group: T.Group) {
     cells.get(cell)!.push(tree);
   }
   const palm = palmGeometry(),
+    distantPalm = palmGeometry(true),
     palmMat = new T.MeshLambertMaterial({
       vertexColors: true,
       side: T.DoubleSide,
@@ -125,15 +265,25 @@ export async function drawCounty(city: City, group: T.Group) {
     );
     if (palms.length) {
       const instances = new T.InstancedMesh(palm, palmMat, palms.length);
+      const silhouette = new T.InstancedMesh(
+        distantPalm,
+        palmMat,
+        palms.length,
+      );
       for (const [i, tree] of palms.entries()) {
         matrix.position.set(tree.p[0], 0, tree.p[2]);
         matrix.rotation.set(0, rng() * Math.PI * 2, 0);
         matrix.scale.setScalar(0.86 + rng() * 0.36);
         matrix.updateMatrix();
         instances.setMatrixAt(i, matrix.matrix);
+        silhouette.setMatrixAt(i, matrix.matrix);
       }
       instances.castShadow = true;
-      group.add(instances);
+      instances.computeBoundingSphere();
+      const { x, z } = instances.boundingSphere!.center;
+      instances.userData.detailCenter = silhouette.userData.farCenter = [x, z];
+      instances.userData.detailRange = silhouette.userData.detailRange = 142;
+      group.add(instances, silhouette);
     }
     const broadleaf = trees.filter((b) => !palms.includes(b));
     if (!broadleaf.length) continue;
@@ -154,48 +304,14 @@ export async function drawCounty(city: City, group: T.Group) {
     trunks.castShadow = leaves.castShadow = true;
     group.add(trunks, leaves);
   }
-  // Low scrub lives off-road, in clusters on the hillsides. Each terrain
-  // cell uses one culled draw and contains no new gameplay obstacles.
-  const brush = new T.IcosahedronGeometry(1, 0),
-    brushMat = new T.MeshLambertMaterial({
-      color: 0x819369,
-      flatShading: true,
-    });
-  for (let tx = -800; tx < 800; tx += 160)
-    for (let tz = -800; tz < 800; tz += 160) {
-      const transforms: T.Matrix4[] = [];
-      for (let i = 0; i < 15; i++) {
-        const x = tx + rng() * 160,
-          z = tz + rng() * 160;
-        if (elevation(x, z) < 2) continue;
-        for (let j = 0; j < 6; j++) {
-          const bx = x + (rng() - 0.5) * 11,
-            bz = z + (rng() - 0.5) * 11,
-            s = 0.45 + rng();
-          matrix.position.set(bx, elevation(bx, bz) + 0.16, bz);
-          matrix.rotation.set(0, rng() * 6.28, 0);
-          matrix.scale.set(s * 1.45, s * 0.53, s * 0.97);
-          matrix.updateMatrix();
-          transforms.push(matrix.matrix.clone());
-        }
-      }
-      if (transforms.length) {
-        const instances = new T.InstancedMesh(
-          brush,
-          brushMat,
-          transforms.length,
-        );
-        transforms.forEach((m, i) => instances.setMatrixAt(i, m));
-        group.add(instances);
-      }
-    }
   const stoneMat = new T.MeshLambertMaterial({ color: 0x9e9b88 });
   for (let i = 0; i < 150;) {
     const x = (rng() - 0.5) * 1560,
       z = (rng() - 0.5) * 1560;
-    if (elevation(x, z) < 1) continue;
+    if (terrainHeight(x, z) < 1 || !clearOfLotsAndRoads(city.plan, x, z))
+      continue;
     const stone = new T.Mesh(rock, stoneMat);
-    stone.position.set(x, elevation(x, z) - 0.3, z);
+    stone.position.set(x, terrainHeight(x, z) - 0.3, z);
     stone.rotation.y = rng() * Math.PI * 2;
     stone.scale.setScalar(
       (2 + rng() * 7) / rock.boundingBox!.getSize(new T.Vector3()).length(),

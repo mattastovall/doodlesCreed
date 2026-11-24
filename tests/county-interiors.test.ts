@@ -5,7 +5,7 @@ import { architectureLadders, cityLot } from "../src/county-architecture.ts";
 import { CountyStructures } from "../src/county-structures.ts";
 
 test("every county structure has a furnished interior reachable through a street-level door", () => {
-  for (let design = 0; design < 7; design++)
+  for (let design = 0; design <= 12; design++)
     for (const variation of [0, 0.5, 0.95]) {
       const boxes = cityLot(10, -20, design, variation);
       const spatial = new Spatial(boxes);
@@ -38,7 +38,7 @@ test("every county structure has a furnished interior reachable through a street
 });
 
 test("each indoor ladder has capsule clearance through its hatch and a standing landing at both ends", () => {
-  for (let design = 0; design < 7; design++)
+  for (let design = 0; design <= 12; design++)
     for (const variation of [0, 0.5, 0.95]) {
       const pieces = cityLot(0, 0, design, variation);
       const spatial = new Spatial(pieces);
@@ -66,4 +66,16 @@ test("each indoor ladder has capsule clearance through its hatch and a standing 
         fixture.solid = true;
       }
     }
+});
+
+test("tower trusses admit sight lines through open bays and intercept shots on their cross braces", () => {
+  for (const design of [11, 12]) {
+    const truss = cityLot(0, 0, design, 0).find((piece) =>
+      piece.kind.endsWith("-truss"),
+    )!;
+    const spatial = new Spatial([truss]);
+    const [x, y, z] = truss.p;
+    assert.equal(spatial.ray([x - 2, y, z], [1, 0, 0], 4)?.box, truss);
+    assert.ok(!spatial.ray([x - 2, y, z - truss.s[2] * 0.26], [1, 0, 0], 4));
+  }
 });

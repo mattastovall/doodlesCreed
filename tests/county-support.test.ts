@@ -73,7 +73,7 @@ test("glazing falls from a broken sill, while grounded jambs stay standing", () 
 });
 
 test("all generated shells are initially supported and destroying a furnishing cannot move an intact shell", () => {
-  for (let d = 0; d < 7; d++)
+  for (let d = 0; d <= 12; d++)
     for (const variation of [0, 0.5, 0.96]) {
       const boxes = cityLot(0, 0, d, variation),
         s = new CountySupport(boxes);
@@ -118,4 +118,22 @@ test("storey boundaries retain ceiling mounts and offset wall brackets", () => {
     remove(solver, boxes, 0).flatMap((g) => g.indices),
     [3],
   );
+});
+
+test("losing a ground-level tower truss brings down the upper landmark assembly", () => {
+  for (const [design, upperKind] of [
+    [11, "hoist-sheave"],
+    [12, "county-roof"],
+  ] as const) {
+    const pieces = cityLot(0, 0, design, 0.55);
+    const side = pieces.findIndex((p) => p.kind.endsWith("-truss"));
+    const solver = new CountySupport(pieces);
+    const lost = remove(solver, pieces, side).flatMap((group) => group.indices);
+    assert.ok(
+      lost.some((i) => pieces[i].kind === upperKind),
+      upperKind,
+    );
+    assert.ok(lost.some((i) => pieces[i].kind === "ladder"));
+    assert.ok(!lost.some((i) => pieces[i].kind === "foundation"));
+  }
 });

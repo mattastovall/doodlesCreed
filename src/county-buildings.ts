@@ -211,7 +211,15 @@ function doorTile(interior: boolean) {
 function signTile(name: string) {
   return tile(
     (c) => {
-      c.fillStyle = "#48597d";
+      const marquees: Record<string, string> = {
+        CINEMA: "#8c303e",
+        "SUNSET GAS": "#bf4a29",
+        "PALM MOTOR LODGE": "#2f817b",
+        "PACIFIC COURT": "#467887",
+        OFFICE: "#3f7d75",
+        IRONWORKS: "#675446",
+      };
+      c.fillStyle = marquees[name] ?? "#34485c";
       c.fillRect(0, 0, 512, 64);
       c.fillStyle = "#eeeede";
       c.fillRect(5, 3, 502, 2);
@@ -240,7 +248,7 @@ function shadeFaces(geometry: T.BufferGeometry) {
   geometry.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
   return geometry;
 }
-function roofGeometry(box: CountyPiece) {
+function pieceGeometry(box: CountyPiece) {
   const shape = box.mesh!,
     positions: number[] = [];
   for (const index of shape.indices)
@@ -261,8 +269,11 @@ interface Part {
   h: number;
   d: number;
   tint: number;
+  facing?: CountyPiece["face"] | "top";
 }
 interface Batch {
+  center: [number, number];
+  far: boolean;
   geometry: T.BufferGeometry;
   material: T.MeshLambertMaterial;
   parts: Part[];
@@ -276,6 +287,7 @@ interface Binding {
 export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
   const cube = shadeFaces(new T.BoxGeometry());
   const geometries = new Map([["box", cube as T.BufferGeometry]]);
+  geometries.set("elevation", shadeFaces(new T.PlaneGeometry()));
   const materials = new Map([
     ["plain", new T.MeshLambertMaterial({ vertexColors: true })],
   ]);
@@ -285,24 +297,50 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
     if (!materials.has(key)) materials.set(key, build());
     return key;
   }
-  const buildingColors = new Map<string, number>();
+  const buildings = new Map<
+    string,
+    { wall: number; roof: number; trim: number; district: [number, number] }
+  >();
+  const finishes: Record<Facade, number[][]> = {
+    homes: [
+      [0xffe8c3, 0xb86548, 0x61877e],
+      [0xf0ba9e, 0x985447, 0xf7dec1],
+      [0xc0d6bc, 0x766859, 0xfaeaca],
+      [0xdfc49e, 0xa35b3e, 0x577c7e],
+    ],
+    works: [
+      [0xca9979, 0x707b7d, 0x87523d],
+      [0xc9beb1, 0x677476, 0x93765c],
+    ],
+    shops: [
+      [0xf4d9ae, 0x9b8472, 0x408f86],
+      [0xffcbac, 0x987e74, 0xb95448],
+      [0xddd7b9, 0x857e78, 0x47748d],
+    ],
+    glass: [[0xb5ccd4, 0x688195, 0x647c8e]],
+    civic: [[0xe6d3ad, 0xa17762, 0xaf8457]],
+    clock: [[0xd0cbb4, 0x7b8988, 0xb49a6e]],
+  };
   for (const box of pieces) {
-    if (!buildingColors.has(box.buildingId)) {
-      const palette = [
-        0xfff1d9, 0xf7d7c6, 0xe1eddf, 0xdae7ed, 0xf8e4bf, 0xfbf3e8,
-      ];
+    let building = buildings.get(box.buildingId);
+    if (!building) {
       let hash = 0;
       for (const char of box.buildingId)
         hash = (Math.imul(hash, 31) + char.charCodeAt(0)) | 0;
-      buildingColors.set(
-        box.buildingId,
-        palette[(hash >>> 0) % palette.length],
-      );
+      const palette = finishes[box.frontage];
+      const [wall, roof, trim] = palette[(hash >>> 0) % palette.length];
+      building = {
+        wall,
+        roof,
+        trim,
+        district: [Math.floor(box.p[0] / 88), Math.floor(box.p[2] / 88)],
+      };
+      buildings.set(box.buildingId, building);
     }
+    const { wall, roof, trim, district } = building;
     const shape = box.closedDoor ?? box;
     const [x, y, z] = shape.p,
       [w, h, d] = shape.s;
-    const district = Math.floor(x / 88) + "," + Math.floor(z / 88);
     function part(
       tint: number,
       px = x,
@@ -313,18 +351,32 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
       sd = d,
       mat = "plain",
       geo = "box",
+      far = false,
+      facing?: Part["facing"],
     ) {
-      const key = district + "/" + mat + "/" + geo;
+      const key = district + "/" + mat + "/" + geo + "/" + far;
       let batch = batches.get(key);
       if (!batch) {
         batch = {
+          center: [(district[0] + 0.5) * 88, (district[1] + 0.5) * 88],
+          far,
           geometry: geometries.get(geo)!,
           material: materials.get(mat)!,
           parts: [],
         };
         batches.set(key, batch);
       }
-      batch.parts.push({ box, x: px, y: py, z: pz, w: sw, h: sh, d: sd, tint });
+      batch.parts.push({
+        box,
+        x: px,
+        y: py,
+        z: pz,
+        w: sw,
+        h: sh,
+        d: sd,
+        tint,
+        facing,
+      });
     }
     // Furniture components use normalized coordinates within their gameplay
     // bounds, so edges, legs and fittings disappear with the object that owns them.
@@ -345,10 +397,24 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
           detail(ink, a, -0.07, c, 0.065, 0.86, 0.11);
     }
     if (box.mesh) {
-      const key = "pitch-" + box.frontage;
-      if (!geometries.has(key)) geometries.set(key, roofGeometry(box));
-      part(0xc4cbd2, x, y, z, w, h, d, "plain", key);
+      const key =
+        box.kind === "county-roof"
+          ? "pitch-" + box.frontage
+          : box.kind + "-" + box.s.map((n) => n.toFixed(3)).join("-");
+      const color =
+        box.kind === "steel-truss"
+          ? 0x944e33
+          : box.kind === "timber-truss"
+            ? 0x7d5435
+            : box.kind === "hoist-sheave"
+              ? 0x484642
+              : roof;
+      if (!geometries.has(key)) geometries.set(key, pieceGeometry(box));
+      part(color, x, y, z, w, h, d, "plain", key);
+      part(color, x, y, z, w, h, d, "plain", key, true);
     } else if (box.piece === "door") {
+      if (box.kind === "entry-door")
+        part(0x615d54, x, y, z, w, h, d, "plain", "elevation", true, "front");
       const inside = box.kind === "room-door";
       const mat = material(box.kind, () => doorTile(inside));
       part(white, x, y, z, w, h, d, mat);
@@ -361,7 +427,16 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
           const mat = material("surface-" + box.frontage, () =>
             surface(box.frontage),
           );
-          part(buildingColors.get(box.buildingId)!, x, y, z, w, h, d, mat);
+          part(
+            box.frontage === "glass" ? 0xb6c9cf : wall,
+            x,
+            y,
+            z,
+            w,
+            h,
+            d,
+            mat,
+          );
           break;
         }
         case "window": {
@@ -373,7 +448,7 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
             const awning = box.frontage === "shops",
               lip = awning ? 0.42 : 0.14;
             part(
-              awning ? 0x57958f : linen,
+              awning ? trim : linen,
               x + (across ? 0 : outside * lip * 0.5),
               y + h * 0.49,
               z + (across ? outside * lip * 0.5 : 0),
@@ -382,6 +457,22 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
               d + (across ? lip : 0.12),
             );
             part(0xe2ddd3, x, y - h * 0.48, z, w + 0.1, 0.095, d + 0.1);
+          }
+          if (
+            box.frontage === "homes" &&
+            box.face === "front" &&
+            box.buildingId.includes("/bungalow-")
+          ) {
+            for (const side of [-1, 1])
+              part(
+                trim,
+                x + side * (w / 2 + 0.25),
+                y,
+                z + 0.14,
+                0.44,
+                h + 0.08,
+                0.085,
+              );
           }
           const mat = material("window-" + box.frontage, () =>
             glazing(box.frontage),
@@ -411,6 +502,31 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
           );
           break;
         }
+        case "sign-curb":
+          part(ink);
+          break;
+        case "porch-column":
+          part(linen);
+          break;
+        case "porch-deck":
+        case "pump-island":
+          part(0xbdafa0);
+          break;
+        case "porch-canopy":
+        case "station-canopy": {
+          const color = box.kind === "station-canopy" ? 0xc14933 : trim;
+          part(color);
+          detail(linen, 0, 0.29, 0, 1.005, 0.22, 1.005);
+          break;
+        }
+        case "pump-column":
+          part(0xd7d2bc);
+          break;
+        case "gas-pump":
+          detail(0xb54935, 0, -0.2, 0, 1, 0.6, 1);
+          detail(linen, 0, 0.29, 0, 1, 0.42, 1);
+          detail(ink, 0, 0.31, 0, 0.73, 0.17, 1.03);
+          break;
         case "partition":
           part(linen);
           detail(slate, 0, -0.45, 0, 1, 0.1, 1.04);
@@ -518,6 +634,61 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
         default:
           part(linen);
       }
+    // The street elevation uses one outward-facing quad per breakable panel.
+    // Retain the original piece binding so distant damage matches close views.
+    if (box.face) {
+      const across = box.face === "front" || box.face === "back";
+      const direction = box.face === "front" || box.face === "right" ? 1 : -1;
+      part(
+        box.kind === "window"
+          ? 0x7896a0
+          : box.frontage === "glass"
+            ? 0xb6c9cf
+            : wall,
+        x + (across ? 0 : (direction * w) / 2),
+        y,
+        z + (across ? (direction * d) / 2 : 0),
+        across ? w : d,
+        h,
+        1,
+        "plain",
+        "elevation",
+        true,
+        box.face,
+      );
+    } else if (!box.mesh && (box.piece === "roof" || box.piece === "floor")) {
+      if (box.kind.endsWith("canopy"))
+        part(
+          box.kind === "station-canopy" ? 0xc14933 : trim,
+          x,
+          y,
+          z,
+          w,
+          h,
+          d,
+          "plain",
+          "box",
+          true,
+        );
+      else
+        part(
+          0xb1aaa1,
+          x,
+          y + h / 2,
+          z,
+          w,
+          d,
+          1,
+          "plain",
+          "elevation",
+          true,
+          "top",
+        );
+    } else if (box.kind === "sign-curb") {
+      part(0x38746f, x, y, z, w, h, d, "plain", "box", true);
+    } else if (box.kind.endsWith("column")) {
+      part(linen, x, y, z, w, h, d, "plain", "box", true);
+    }
   }
   const transform = new T.Object3D(),
     tint = new T.Color();
@@ -527,8 +698,12 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
       batch.material,
       batch.parts.length,
     );
+    mesh.userData[batch.far ? "farCenter" : "detailCenter"] = batch.center;
+    mesh.userData.detailRange = 125;
+    mesh.visible = !batch.far;
     mesh.receiveShadow = true;
     mesh.castShadow =
+      !batch.far &&
       !batch.material.transparent &&
       batch.parts.some(
         (p) =>
@@ -540,6 +715,17 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
     mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
     batch.parts.forEach((p, i) => {
       transform.position.set(p.x, p.y, p.z);
+      transform.rotation.set(
+        p.facing === "top" ? -Math.PI / 2 : 0,
+        p.facing === "back"
+          ? Math.PI
+          : p.facing === "right"
+            ? Math.PI / 2
+            : p.facing === "left"
+              ? -Math.PI / 2
+              : 0,
+        0,
+      );
       transform.scale.set(p.w, p.h, p.d);
       transform.updateMatrix();
       mesh.setMatrixAt(i, transform.matrix);
@@ -654,6 +840,7 @@ export function countyBuildings(group: T.Group, pieces: CountyPiece[]) {
       cluster.members.add(i);
       moving.set(i, { id, slots: [] });
       for (const binding of bindings) {
+        if (binding.mesh.userData.farCenter) continue;
         let batch = batches.get(binding.mesh);
         if (!batch) {
           batch = [];

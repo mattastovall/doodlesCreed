@@ -1,4 +1,4 @@
-import { coastSun } from "./county-atmosphere.ts";
+import { coastSun, countyView } from "./county-atmosphere.ts";
 import { blimpPosition, type Blimp } from "./aerial.ts";
 import * as T from "three";
 import { type City, type Box, type V3, randomSeed } from "./world.ts";
@@ -227,12 +227,14 @@ export class Renderer {
     const county = city.seed === "switchback-county";
     this.renderer.shadowMap.enabled = county;
     this.renderer.shadowMap.autoUpdate = !county;
-    (this.scene.fog as T.Fog).color.set(county ? 0xe1cfc1 : PAPER);
+    this.scene.fog = county
+      ? new T.FogExp2(countyView.haze, countyView.density)
+      : new T.Fog(PAPER, 65, 250);
     this.inkPost.uniforms.ink.value.set(county ? 0x304464 : INK);
     if (county !== this.county) {
       this.county = county;
       this.frameCost = 0.025;
-      this.camera.far = county ? 285 : 700;
+      this.camera.far = county ? countyView.far : 700;
       this.camera.updateProjectionMatrix();
       this.inkTarget.dispose();
       this.inkTarget.samples = county ? 0 : 4;
@@ -257,7 +259,9 @@ export class Renderer {
           b.kind === "building" ||
           b.kind === "road" ||
           b.kind === "ground" ||
-          b.kind === "county-tree")
+          b.kind === "county-tree" ||
+          b.kind === "county-pine" ||
+          b.kind === "county-orchard")
       )
         continue;
       if (b.kind === "collision" || b.kind === "boundary" || b.mesh) continue;
@@ -846,7 +850,7 @@ export class Renderer {
           center[1] - this.camera.position.z,
         );
         child.visible = child.userData.farCenter
-          ? dist > 145
+          ? dist > (child.userData.detailRange ?? 145)
           : dist <= (child.userData.detailRange ?? 145);
       } else if (child.position.x || child.position.z)
         child.visible =

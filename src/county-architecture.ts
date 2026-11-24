@@ -30,6 +30,7 @@ interface Storey {
   base: number;
   top: number;
   style: Facade;
+  frame?: "steel" | "timber";
 }
 interface Wing {
   dx: number;
@@ -39,6 +40,7 @@ interface Wing {
   top: number;
   floors: number;
   style: Facade;
+  frame?: "steel" | "timber";
 }
 interface ShellOptions {
   sign?: string;
@@ -47,6 +49,67 @@ interface ShellOptions {
   backPortal?: boolean;
   theatre?: boolean;
   stoop?: boolean;
+  porch?: number;
+  roofSign?: string;
+}
+
+// Trusses and sheaves use the same triangular surfaces for ray hits, capsule
+// movement and drawing. The open spaces between steel or timber members are real.
+function landmarkFrame(
+  box: CountyPiece,
+  wheel = false,
+): NonNullable<Box["mesh"]> {
+  const vertices: number[] = [],
+    indices: number[] = [];
+  const [x, y, z] = box.p,
+    [w, h, d] = box.s;
+  function beam(u0: number, v0: number, u1: number, v1: number, width: number) {
+    const len = Math.hypot(u1 - u0, v1 - v0);
+    const du = ((-(v1 - v0) / len) * width) / 2,
+      dv = (((u1 - u0) / len) * width) / 2;
+    const start = vertices.length / 3;
+    for (const side of [-0.5, 0.5])
+      for (const [u, v] of [
+        [u0 - du, v0 - dv],
+        [u1 - du, v1 - dv],
+        [u1 + du, v1 + dv],
+        [u0 + du, v0 + dv],
+      ]) {
+        if (wheel) vertices.push(x + u, y + v, z + side * d);
+        else vertices.push(x - side * w, y + v, z + u);
+      }
+    for (const i of [
+      0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2,
+      3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7,
+    ])
+      indices.push(start + i);
+  }
+  if (wheel) {
+    const r = w * 0.46;
+    for (let i = 0; i < 16; i++) {
+      const a = (i * Math.PI) / 8,
+        b = ((i + 1) * Math.PI) / 8;
+      beam(
+        r * Math.cos(a),
+        r * Math.sin(a),
+        r * Math.cos(b),
+        r * Math.sin(b),
+        0.28,
+      );
+      if (i % 2 === 0) beam(0, 0, r * Math.cos(a), r * Math.sin(a), 0.16);
+    }
+    for (const side of [-1, 1]) beam(side * 0.9, -h / 2 + 0.05, 0, 0, 0.22);
+  } else {
+    const post = box.kind === "timber-truss" ? 0.56 : 0.39;
+    const zEdge = (d - post) / 2,
+      hEdge = (h - post) / 2;
+    for (const side of [-1, 1]) {
+      beam(side * zEdge, -h / 2, side * zEdge, h / 2, post);
+      beam(-zEdge, side * hEdge, zEdge, side * hEdge, post);
+      beam(-zEdge, side * hEdge, zEdge, -side * hEdge, post * 0.6);
+    }
+  }
+  return { vertices, indices };
 }
 
 // Wall panels, glass, fittings and slabs are ordinary world boxes. The same
@@ -74,6 +137,7 @@ export function cityLot(
           base: base + f * h,
           top: base + (f + 1) * h,
           style: wing.style,
+          frame: wing.frame,
         });
       base = wing.top;
     }
@@ -144,10 +208,11 @@ export function cityLot(
           );
           b.face = face;
         }
-        let end = hi;
+
         if (entry || portal) {
           const openingRight = cx + doorWidth / 2;
-          panel(openingRight, hi, base, ceiling);
+          if (id === "kiosk") panel(openingRight, hi, base, ceiling);
+          else bays(openingRight, hi);
           panel(cx - doorWidth / 2, openingRight, base + doorHeight, ceiling);
           if (!portal)
             add(
@@ -156,41 +221,70 @@ export function cityLot(
               [cx, base + doorHeight / 2, fixed],
               [doorWidth, doorHeight, 0.13],
             );
-          end = cx - doorWidth / 2;
-        }
-        // A glazed opening has its own hit volume, with a solid sill and lintel.
-        // Exposed edges and wide stretches of masonry stay independently breakable.
-        const span = end - lo;
-        if (span < 2.2) {
-          panel(lo, end, base, ceiling);
-          return;
-        }
-        const panes = Math.max(1, Math.round(span / 8));
-        for (let i = 0; i < panes; i++) {
-          const start = lo + (span * i) / panes,
-            stop = lo + (span * (i + 1)) / panes;
-          const inset = Math.min(1.1, (stop - start) * 0.17);
-          const l = start + inset,
-            r = stop - inset;
-          const sill =
-            base + (style === "shops" || style === "glass" ? 0.65 : 1.04);
-          const head = Math.min(
-            ceiling - 0.26,
-            sill + (style === "civic" ? 2.2 : 1.7),
-          );
-          panel(start, l, base, ceiling);
-          panel(l, r, base, sill);
-          panel(l, r, sill, head, true);
-          panel(l, r, head, ceiling);
-          panel(r, stop, base, ceiling);
+          bays(lo, cx - doorWidth / 2);
+        } else bays(lo, hi);
+        function bays(lo: number, end: number) {
+          // A glazed opening has its own hit volume, with a solid sill and lintel.
+          // Exposed edges and wide stretches of masonry stay independently breakable.
+          const span = end - lo;
+          if (span < 2.2) {
+            panel(lo, end, base, ceiling);
+            return;
+          }
+          const panes = Math.max(1, Math.round(span / 8));
+          for (let i = 0; i < panes; i++) {
+            const start = lo + (span * i) / panes,
+              stop = lo + (span * (i + 1)) / panes;
+            const inset =
+              style === "homes"
+                ? Math.min(1.65, (stop - start) * 0.24)
+                : Math.min(
+                    style === "glass" ? 0.42 : 1.1,
+                    (stop - start) * 0.17,
+                  );
+            const l = start + inset,
+              r = stop - inset;
+            const sill =
+              base + (style === "shops" || style === "glass" ? 0.65 : 1.04);
+            const head = Math.min(
+              ceiling - 0.26,
+              sill +
+                (style === "glass"
+                  ? 2.85
+                  : (style === "shops" && id !== "kiosk") ||
+                      style === "works" ||
+                      style === "civic"
+                    ? 2.2
+                    : 1.7),
+            );
+            panel(start, l, base, ceiling);
+            panel(l, r, base, sill);
+            panel(l, r, sill, head, true);
+            panel(l, r, head, ceiling);
+            panel(r, stop, base, ceiling);
+          }
         }
       }
       const prev = storeys[index - 1];
       const terraceEntry = !!prev && front < prev.z + prev.d / 2 - 1.6;
-      side("front", !index || terraceEntry, !index && options.frontPortal);
-      side("back", false, !index && options.backPortal);
-      side("left");
-      side("right");
+      if (room.frame) {
+        // Each perimeter truss bears the deck above it. Its braces share one
+        // destructible member and leave the front and rear approaches open.
+        for (const px of [left + 0.23, right - 0.23]) {
+          const truss = add(
+            "wall",
+            room.frame + "-truss",
+            [px, (base + ceiling) / 2, cz],
+            [0.46, ceiling - base, d],
+          );
+          truss.mesh = landmarkFrame(truss);
+        }
+      } else {
+        side("front", !index || terraceEntry, !index && options.frontPortal);
+        side("back", false, !index && options.backPortal);
+        side("left");
+        side("right");
+      }
 
       const upper = storeys[index + 1];
       const access = !!upper || !options.pitch;
@@ -236,7 +330,7 @@ export function cityLot(
         deck(cx, right, rear, front);
       }
 
-      if (w >= 7 && d >= 10 && !options.theatre) {
+      if (!room.frame && w >= 7 && d >= 10 && !options.theatre) {
         const partitionZ = cz - 0.02 * d,
           opening = 1.56;
         const mid = (left + thick + cx - opening / 2) / 2;
@@ -266,7 +360,7 @@ export function cityLot(
           [opening, ceiling - base - doorHeight, 0.15],
         );
       }
-      if (w >= 7 && d >= 10 && !options.theatre) {
+      if (!room.frame && w >= 7 && d >= 10 && !options.theatre) {
         add(
           "fixture",
           "framed-print",
@@ -301,7 +395,19 @@ export function cityLot(
         rx = 2 * cx - lx;
       const near = cz + 0.26 * d,
         far = cz - 0.22 * d;
-      if (options.theatre && !index) {
+      if (room.frame) {
+        if (room.frame === "steel" && !upper) {
+          for (const offset of [-2.6, 2.6]) {
+            const sheave = add(
+              "furniture",
+              "hoist-sheave",
+              [cx + offset, top + 2.3, front - 1.4],
+              [4.6, 4.6, 0.72],
+            );
+            sheave.mesh = landmarkFrame(sheave, true);
+          }
+        }
+      } else if (options.theatre && !index) {
         for (let row = 0; row < 3; row++)
           for (const px of [cx - w * 0.24, cx + w * 0.24])
             furnishing(
@@ -364,6 +470,55 @@ export function cityLot(
           [cx, base + doorHeight + 0.05 + h / 2, front + 0.08],
           [Math.min(w * 0.68, 11.4), h, 0.19],
         ).sign = options.sign;
+      }
+      if (!index && options.porch) {
+        const width = options.porch;
+        const deckDepth = 2.1,
+          height = 2.95;
+        add(
+          "floor",
+          "porch-deck",
+          [cx, 0.1, front + deckDepth / 2],
+          [width, 0.2, deckDepth],
+        );
+        for (const side of [-1, 1])
+          for (const offset of [0.17, deckDepth - 0.17])
+            add(
+              "wall",
+              "porch-column",
+              [
+                cx + side * (width / 2 - 0.18),
+                (height + 0.2) / 2,
+                front + offset,
+              ],
+              [0.22, height - 0.2, 0.22],
+            );
+        add(
+          "roof",
+          "porch-canopy",
+          [cx, height + 0.12, front + deckDepth / 2 - 0.08],
+          [width, 0.24, deckDepth + 0.16],
+        );
+      }
+      if (!upper && options.roofSign) {
+        // The letters stand on shallow curb walls at the street edge of the
+        // roof, across the building from the hatch and its landing.
+        const width = Math.min(11, w * 0.76),
+          height = 1.8;
+        const px = cx - (w - width) * 0.28,
+          pz = front - 0.52;
+        add(
+          "wall",
+          "sign-curb",
+          [px, top + height / 2, pz],
+          [width, height, 0.22],
+        );
+        add(
+          "fixture",
+          "sign",
+          [px, top + height * 0.54, pz + 0.17],
+          [width + 0.06, height * 0.92, 0.12],
+        ).sign = options.roofSign;
       }
       if (!index && options.stoop)
         add("floor", "stoop", [cx, 0.095, front + 0.5], [2.48, 0.19, 1]);
@@ -455,7 +610,7 @@ export function cityLot(
       break;
     case 3:
       shell("cinema", [wing(0, 8, 23, 7, 6.5, 1, "shops")], {
-        sign: "CINEMA",
+        roofSign: "CINEMA",
         backPortal: true,
       });
       shell(
@@ -489,6 +644,108 @@ export function cityLot(
         wing(9, 5, 7, 8, 18, 4, "civic"),
         wing(9, 5, 7, 8, 24, 1, "clock"),
       ]);
+      break;
+    case 7:
+      for (let i = 0; i < 2; i++) {
+        const depth = i ? 12 : 15;
+        shell(
+          "bungalow-" + i,
+          [
+            wing(
+              i ? 7.7 : -7.3,
+              i ? 3 : -3,
+              i ? 11 : 12.8,
+              depth,
+              3.6 + ((tier + i) % 2) * 0.6,
+              1,
+              "homes",
+            ),
+          ],
+          {
+            porch: i ? 5.6 : 8.4,
+            pitch: { bays: 1, rise: i ? 2.7 : 2.15, ridge: 0.5 },
+          },
+        );
+      }
+      break;
+    case 8:
+      // An L-shaped motor court around a drive-in forecourt. The reception
+      // and guest wing have independent front doors and a covered walkway.
+      shell("motor-lodge", [wing(0, -6.8, 26, 8.8, 7.8, 2, "homes")], {
+        roofSign: "PALM MOTOR LODGE",
+        porch: 25,
+      });
+      shell("reception", [wing(-9.2, 5, 7.6, 9.2, 4, 1, "shops")], {
+        sign: "OFFICE",
+      });
+      break;
+    case 9: {
+      shell("service-station", [wing(-3, -6.5, 21, 9.8, 4.2, 1, "shops")], {
+        sign: "SUNSET GAS",
+      });
+      const add = (
+        piece: Piece,
+        kind: string,
+        px: number,
+        py: number,
+        pz: number,
+        w: number,
+        h: number,
+        d: number,
+      ) =>
+        pieces.push({
+          piece,
+          kind,
+          p: [x + px, py, z + pz],
+          s: [w, h, d],
+          solid: true,
+          frontage: "shops",
+          buildingId: pieces[0].buildingId,
+        });
+      // Two pump islands leave a central drive lane beneath the flat canopy.
+      for (const px of [-6.1, 6.1]) {
+        add("floor", "pump-island", px, 0.09, 6.8, 1.6, 0.18, 6.7);
+        add("wall", "pump-column", px, 2.44, 6.8, 0.46, 4.52, 0.46);
+        for (const pz of [4.85, 8.75])
+          add("furniture", "gas-pump", px, 1.09, pz, 0.93, 1.82, 0.68);
+      }
+      add("roof", "station-canopy", 0, 5, 6.8, 20, 0.6, 9.6);
+      break;
+    }
+    case 11:
+      shell(
+        "ore-headframe",
+        [
+          wing(0, 0, 22.8, 17.6, 4.8, 1, "works"),
+          { ...wing(1.6, -0.8, 13.6, 11.4, 17.2, 2, "works"), frame: "steel" },
+          { ...wing(1.6, -0.8, 10.8, 8.6, 23.4, 1, "works"), frame: "steel" },
+        ],
+        { sign: "MESA ORE HOIST" },
+      );
+      break;
+    case 12:
+      shell(
+        "fire-lookout",
+        [
+          wing(0, 0, 11.6, 12.4, 3.8, 1, "homes"),
+          { ...wing(0, 0, 9.6, 10, 21.8, 3, "homes"), frame: "timber" },
+          wing(0, -0.3, 8.6, 8.8, 25.4, 1, "glass"),
+        ],
+        {
+          sign: "LAUREL FIRE LOOKOUT",
+          pitch: { bays: 1, rise: 2.75, ridge: 0.5 },
+        },
+      );
+      break;
+    case 10:
+      shell(
+        "pacific-court",
+        [
+          wing(0, -1, 25.4, 18, 4.1, 1, "shops"),
+          wing(-1.8, -2.5, 20.5, 13.5, 11.8 + 3.8 * tier, 2 + tier, "homes"),
+        ],
+        { roofSign: "PACIFIC COURT", porch: 18.8 },
+      );
       break;
     default:
       shell("kiosk", [wing(-7, -5, 9, 8, 3.8, 1, "shops")], { sign: "KIOSK" });

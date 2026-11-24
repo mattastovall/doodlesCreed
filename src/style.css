@@ -1633,3 +1633,19 @@ dialog .error:empty {
       #363947 var(--seat-to)
     );
 }
+
+.county-map-key {
+  display: none;
+}
+.county-hud .county-map-key {
+  display: inline;
+}
+#city-map-panel.overview {
+  top: 50%;
+  right: 50%;
+  transform: translate(50%, -50%);
+}
+#city-map-panel.overview #city-map {
+  width: min(68vh, 82vw);
+  height: min(68vh, 82vw);
+}

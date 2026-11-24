@@ -43,6 +43,7 @@ import { CountyWreckage, type RubbleMessage } from "./county-wreckage.ts";
 import { CountyTires } from "./county-tires.ts";
 import { CountyDebris } from "./county-debris.ts";
 import { CountyStructures } from "./county-structures.ts";
+import { countyAtlas, countyPlaces, placeName } from "./county-atlas.ts";
 import { COUNTY, countyLadders, countyCars, type CountyCar } from "./county.ts";
 import { CoverPeek, peekEye, validatedLean } from "./cover-peek.ts";
 import { newInventory } from "./weapon-pickups.ts";
@@ -103,6 +104,7 @@ const timeLabel = (s: number) =>
     .padStart(2, "0")}`;
 type Mode = "contract" | "roam" | "online";
 class Game {
+  private countyOverview = false;
   render = new Renderer(canvas);
   audio = new AudioEngine();
   countySelected =
@@ -731,6 +733,10 @@ class Game {
     }
     this.remoteRopes.clear();
     this.city = city;
+    this.countyOverview = false;
+    $("city-map-panel").classList.remove("overview");
+    $("city-map").setAttribute("width", "190");
+    $("city-map").setAttribute("height", "190");
     $("hud").classList.toggle("county-hud", seed === COUNTY);
     this.cars = seed === COUNTY ? countyCars() : [];
     this.vehicle = -1;
@@ -1437,6 +1443,14 @@ class Game {
       if (e.code === "KeyR") this.combat.reload();
       if (/^Digit[12345]$/.test(e.code))
         this.setWeapon(Number(e.code.slice(-1)) - 1);
+      if (e.code === "KeyN" && this.seed === COUNTY) {
+        this.countyOverview = !this.countyOverview;
+        $("city-map-panel").classList.toggle("overview", this.countyOverview);
+        const size = this.countyOverview ? "570" : "190";
+        $("city-map").setAttribute("width", size);
+        $("city-map").setAttribute("height", size);
+        this.drawCityMap();
+      }
       if (e.code === "KeyM") {
         this.audio.enabled = !this.audio.enabled;
         this.notice(this.audio.enabled ? "SOUND ON" : "SOUND OFF");
@@ -2611,23 +2625,21 @@ class Game {
       c = canvas.getContext("2d")!;
     if (this.seed === COUNTY) {
       const p = this.player.position;
-      const scale = this.vehicle >= 0 ? 0.82 : 1.18;
+      const overview = this.countyOverview;
+      const scale = overview
+        ? 90 / this.city.bounds
+        : this.vehicle >= 0
+          ? 0.82
+          : 1.18;
+      const cx = overview ? 0 : p.x,
+        cz = overview ? 0 : p.z;
+      c.save();
+      if (overview) c.scale(3, 3);
       c.clearRect(0, 0, 190, 190);
       c.save();
-      c.translate(95 - p.x * scale, 95 - p.z * scale);
+      c.translate(95 - cx * scale, 95 - cz * scale);
       c.scale(scale, scale);
-      c.fillStyle = "#8d9eb72c";
-      for (const b of this.city.plan.parcels)
-        c.fillRect(b.x - b.w / 2, b.z - b.d / 2, b.w, b.d);
-      c.lineCap = "round";
-      for (const road of this.city.plan.streets) {
-        c.lineWidth = road.width * 0.62;
-        c.strokeStyle = road.class === "arterial" ? "#687da0" : "#a3afc0";
-        c.beginPath();
-        c.moveTo(road.a[0], road.a[2]);
-        c.lineTo(road.b[0], road.b[2]);
-        c.stroke();
-      }
+      c.drawImage(countyAtlas(this.city), -this.city.bounds, -this.city.bounds);
       c.font = "bold 11px sans-serif";
       c.textAlign = "center";
       for (const t of this.shops?.tills ?? []) {
@@ -2651,8 +2663,23 @@ class Game {
         }
       c.restore();
       c.save();
-      this.drawMapPlayers(c, p.x, p.z, scale);
-      c.translate(95, 95);
+      if (overview) {
+        c.font = "600 5.3px sans-serif";
+        c.textAlign = "center";
+        c.lineJoin = "round";
+        c.lineWidth = 1.6;
+        c.strokeStyle = "#fffdf1";
+        c.fillStyle = "#283b54";
+        for (const place of countyPlaces) {
+          const x = 95 + place.x * scale,
+            y = 95 + place.z * scale - 6;
+          c.strokeText(place.name, x, y);
+          c.fillText(place.name, x, y);
+        }
+      }
+      this.drawMapPlayers(c, cx, cz, scale);
+      c.translate(95 + (p.x - cx) * scale, 95 + (p.z - cz) * scale);
+      if (overview) c.scale(0.6, 0.6);
       c.rotate(-this.player.yaw);
       c.fillStyle = "#d23c45";
       c.beginPath();
@@ -2663,27 +2690,8 @@ class Game {
       c.closePath();
       c.fill();
       c.restore();
-      const district = this.city.plan.blocks.find(
-        (b) =>
-          p.x >= b.minX - 8 &&
-          p.x <= b.maxX + 8 &&
-          p.z >= b.minZ - 8 &&
-          p.z <= b.maxZ + 8,
-      );
-      $("neighborhood-label").textContent = district
-        ? p.x < 0
-          ? "Westhaven"
-          : "Eastbank"
-        : this.city.plan.streets.some(
-              (s) =>
-                s.class === "arterial" &&
-                Math.hypot(
-                  p.x - (s.a[0] + s.b[0]) / 2,
-                  p.z - (s.a[2] + s.b[2]) / 2,
-                ) < 29,
-            )
-          ? "County Highway"
-          : "Highlands";
+      c.restore();
+      $("neighborhood-label").textContent = placeName(p.x, p.z);
       return;
     }
     const mapBounds = this.city.arena

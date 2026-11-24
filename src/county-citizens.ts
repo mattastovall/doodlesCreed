@@ -5,7 +5,13 @@ import type { CrimeState } from "./county-crime.ts";
 import type { Npc } from "../server/npcs.ts";
 import { movementYaw } from "./actor-hit.ts";
 import type { Street } from "./city-plan.ts";
-import { alongStreet, ruralRoad, TOWNS } from "./county-plan.ts";
+import {
+  alongStreet,
+  COUNTY_SETTLEMENTS,
+  ruralRoad,
+  terrainHeight,
+  TOWNS,
+} from "./county-plan.ts";
 import type { CountyCar } from "./county.ts";
 import { VEHICLE_DIMENSIONS } from "./county-vehicle-dimensions.ts";
 import { distance, randomSeed, type City, type V3 } from "./world.ts";
@@ -64,7 +70,7 @@ function onRoute(s: Street, dir: number, t: number, driving: boolean): V3 {
     dir === 1 ? t : 1 - t,
     dir * (driving ? lane(s) : s.width / 2 + 0.72),
   );
-  p[1] = driving ? 0.08 : 0.16;
+  p[1] += driving ? 0.08 : 0.16;
   return p;
 }
 function setGoal(route: Route, driving: boolean, entering: boolean) {
@@ -148,10 +154,13 @@ export class CountyCitizens {
         this.junctions.get(key)!.push(s);
       }
     }
+    const villageStreets = COUNTY_SETTLEMENTS.map(({ id }) =>
+      streets.filter((s) => s.id.startsWith(id + "-main-")),
+    );
     for (const [district, town] of TOWNS.entries()) {
       const random = randomSeed(city.seed + "-neighbors-" + town);
-      const local = streets.filter(
-        (s) => !ruralRoad(s) && Math.sign(s.a[0]) === Math.sign(town),
+      const local = streets.filter((s) =>
+        s.id.startsWith(town < 0 ? "mill-" : "terrace-"),
       );
       const byCinema = local
         .slice()
@@ -164,7 +173,12 @@ export class CountyCitizens {
         .map((road) => ({ road, rank: random() }))
         .sort((a, b) => a.rank - b.rank);
       for (let i = 0; i < 12; i++) {
-        const s = i < 3 ? byCinema[i] : shuffled[i].road;
+        const outskirts = villageStreets[i - 9];
+        const s = outskirts?.length
+          ? outskirts[(district * 2 + 1) % outskirts.length]
+          : i < 3
+            ? byCinema[i]
+            : shuffled[i].road;
         const dir = i % 2 ? -1 : 1;
         const p = onRoute(s, dir, 0.22 + random() * 0.56, false);
         this.add(
@@ -515,6 +529,7 @@ export class CountyCitizens {
     );
     const from = a.p;
     const next: V3 = [from[0] + dx * step, from[1], from[2] + dz * step];
+    next[1] = terrainHeight(next[0], next[2]) + 0.16;
     const clearance = 0.48;
     const obstruction =
       this.cars.some(
@@ -599,6 +614,7 @@ export class CountyCitizens {
       Math.max(0.31, 1 - Math.abs(turn) * 0.58);
     const step = Math.min(len, pace * dt);
     const next: V3 = [car.p[0] + dx * step, 0.08, car.p[2] + dz * step];
+    next[1] += terrainHeight(next[0], next[2]);
     const [, length] = VEHICLE_DIMENSIONS[car.kind];
     const nose: V3 = [next[0] + dx * length, next[1], next[2] + dz * length];
     if (

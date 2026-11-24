@@ -1,3 +1,4 @@
+import { regionalTrees } from "./county-landcover.ts";
 import type { SeatInteraction } from "./county-car-access.ts";
 import { architectureLadders, cityLot } from "./county-architecture.ts";
 import { randomSeed, type V3, type City, type Box } from "./world.ts";
@@ -6,6 +7,7 @@ import {
   alongStreet,
   COUNTY,
   countyRoutes,
+  COUNTY_SETTLEMENTS,
   elevation,
   LIMIT,
   planCounty,
@@ -77,7 +79,7 @@ export function countyWorld(): City {
       dz = street.b[2] - street.a[2];
     const length = Math.hypot(dx, dz);
     const p = alongStreet(street, 0.5);
-    p[1] = 0.02;
+    p[1] += 0.02;
     boxes.push({
       p,
       s: [
@@ -125,6 +127,7 @@ export function countyWorld(): City {
           mesh: { vertices, indices },
         });
     }
+  boxes.push(...regionalTrees(plan, LIMIT));
   boxes.forEach((box, i) => {
     if (box.piece) box.pieceId = i;
   });
@@ -134,7 +137,7 @@ export function countyWorld(): City {
     boxes,
     spawns,
     bounds: LIMIT,
-    flightCeiling: 130,
+    flightCeiling: 210,
     plan,
     buildings: [],
     beacons: [
@@ -145,6 +148,7 @@ export function countyWorld(): City {
         )!;
         return alongStreet(main, 0.5);
       }),
+      ...COUNTY_SETTLEMENTS.map(({ x, z }): V3 => [x, 0, z]),
     ],
     nodes,
     links,
@@ -200,7 +204,9 @@ export function parkedCars(lots = planCounty().lots): CountyCar[] {
       .sort((a, b) => a.rank - b.rank)
       .map((e) => e.l);
     function place(kind: VehicleKind, designs: number[]) {
-      const index = candidates.findIndex((l) => designs.includes(l.choice));
+      const index = candidates.findIndex((l) =>
+        designs.includes(l.parkingChoice ?? l.choice),
+      );
       const [lot] = candidates.splice(index < 0 ? 0 : index, 1);
       curb(lot, lot.front, 0.33 + rand() * 0.34, kind);
     }
@@ -235,14 +241,21 @@ export function countyCars(): CountyCar[] {
   for (const [townIndex, town] of TOWNS.entries()) {
     const main = plan.streets.filter(
       (s) =>
-        !s.id.startsWith("county-road-") &&
+        (s.id.startsWith("mill-") || s.id.startsWith("terrace-")) &&
         s.class === "arterial" &&
         Math.sign(s.a[0]) === Math.sign(town),
     );
     const cinema = lots.find(
       (lot) => lot.town === town && lot.landmark === "cinema",
     )!;
-    const routes = [main[0], main[2], main.at(-1)!, cinema.front];
+    const regionalMain = (id: string) =>
+      plan.streets.find((s) => s.id === id + "-main-1")!;
+    const routes = [
+      townIndex === 0 ? main[0] : regionalMain("red-mesa"),
+      regionalMain(townIndex === 0 ? "saltbrush" : "laurel"),
+      main.at(-1)!,
+      cinema.front,
+    ];
     for (const [i, road] of routes.entries()) {
       const dir = i % 2 ? -1 : 1;
       const offset = dir * Math.min(road.width * 0.21, 2.8);
@@ -251,7 +264,7 @@ export function countyCars(): CountyCar[] {
         .find((p) =>
           cars.every((c) => Math.hypot(c.p[0] - p[0], c.p[2] - p[2]) > 7),
         )!;
-      p[1] = 0.08;
+      p[1] += 0.08;
       const dx = road.b[0] - road.a[0],
         dz = road.b[2] - road.a[2];
       const serial = townIndex * routes.length + i;
@@ -263,6 +276,18 @@ export function countyCars(): CountyCar[] {
         yaw: Math.atan2(-dir * dx, -dir * dz),
       });
     }
+  }
+  // A spare vehicle at each service station makes the outlying towns usable
+  // return points. Append these after the stable spawn and civilian car slots.
+  for (const [i, place] of COUNTY_SETTLEMENTS.entries()) {
+    const station = lots.find((l) => l.town === place.x && l.choice === 9)!;
+    cars.push({
+      p: [station.x, 0.15, station.z + 6.8],
+      yaw: Math.PI,
+      kind: (["delivery", "coupe", "minivan"] as const)[i],
+      access: "open",
+      driver: null,
+    });
   }
   return cars;
 }
