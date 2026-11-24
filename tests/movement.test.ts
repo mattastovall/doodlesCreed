@@ -74,3 +74,14 @@ test("reset clears held action latches so a fresh jump or vault is accepted", as
   assert.equal(c.action, "VAULT");
   p.dispose();
 });
+test("immersed players paddle at the waterline and fall again after leaving the water", async () => {
+  const { p, c } = await fixture();
+  for (let frame = 0; frame < 450; frame++)
+    c.update(1 / 120, { ...idleInput(), forward: 1 }, 4);
+  assert.equal(c.action, "SWIM");
+  assert.ok(Math.abs(c.position.y - 3) < 0.15);
+  assert.ok(c.speed > 1 && c.speed < 6);
+  frames(c, 240);
+  assert.ok(c.grounded);
+  p.dispose();
+});

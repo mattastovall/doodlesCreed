@@ -1,3 +1,4 @@
+import { sampleCountyWater } from "./county-hydrology.ts";
 import { insideVehicle } from "./county-pedestrian-collision.ts";
 import {
   ACCESS_WINDOW,
@@ -2154,7 +2155,13 @@ class Game {
       p.action = "DRIVING";
       p.grounded = true;
       this.aiming = false;
-    } else if (!this.seatPending) this.player.update(dt, input);
+    } else if (!this.seatPending) {
+      const water =
+        this.seed === COUNTY
+          ? sampleCountyWater(this.player.position.x, this.player.position.z)
+          : undefined;
+      this.player.update(dt, input, water?.surfaceY);
+    }
     const nearGround =
       this.vehicle < 0 &&
       this.player.velocity.y <= 0 &&

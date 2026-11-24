@@ -1,18 +1,33 @@
 import { roadsidePlaces } from "./county-highways.ts";
 import { COUNTY_SETTLEMENTS, terrainHeight } from "./county-plan.ts";
-import { dryCountry } from "./county-landcover.ts";
+import { countyHabitat } from "./county-landcover.ts";
+import { countyWaterBounds, sampleCountyWater } from "./county-hydrology.ts";
 import type { City } from "./world.ts";
 
+const waterNames = {
+  lake: "Laurel Lake",
+  marsh: "Alder Marsh",
+  creek: "Alder Creek",
+  spring: "Saltbrush Spring",
+};
+const waterPlaces = [
+  { name: waterNames.lake, x: 200, z: 635 },
+  { name: waterNames.marsh, x: -170, z: 690 },
+  { name: waterNames.spring, x: -335, z: -590 },
+];
 export const countyPlaces = [
   { name: "Westhaven", x: -320, z: 0, radius: 190 },
   { name: "Eastbank", x: 320, z: 0, radius: 190 },
   ...COUNTY_SETTLEMENTS.map((p) => ({ ...p, radius: 115 })),
+  ...waterPlaces.map((p) => ({ ...p, radius: 0, water: true })),
   ...roadsidePlaces.map((p) => ({ ...p, radius: 25, landmark: true })),
 ];
 
 export function placeName(x: number, z: number, plan: City["plan"]) {
   for (const site of roadsidePlaces)
     if (Math.hypot(site.x - x, site.z - z) < 25) return site.name;
+  const water = sampleCountyWater(x, z);
+  if (water && water.shoreDistance < 12) return waterNames[water.kind];
   const block = plan.blocks.find(
     (b) =>
       b.district &&
@@ -49,12 +64,11 @@ export function countyAtlas(city: City) {
   for (let x = -city.bounds; x < city.bounds; x += 16)
     for (let z = -city.bounds; z < city.bounds; z += 16) {
       const h = terrainHeight(x, z),
-        dry = dryCountry(x, z);
+        { dry, woods: forest } = countyHabitat(x, z);
       const slope = Math.max(
         -12,
         Math.min(12, (h - terrainHeight(x - 16, z - 16)) * 0.65),
       );
-      const forest = Math.min(1, Math.max(0, (z - 265) / 180));
       const band = Math.min(16, Math.floor(Math.max(0, h) / 20) * 2);
       ctx.fillStyle =
         "rgb(" +
@@ -68,6 +82,17 @@ export function countyAtlas(city: City) {
         ")";
       ctx.fillRect(x, z, 16, 16);
     }
+  for (const area of countyWaterBounds)
+    for (let x = area.minX; x < area.maxX; x += 4)
+      for (let z = area.minZ; z < area.maxZ; z += 4) {
+        const water = sampleCountyWater(x + 2, z + 2);
+        if (!water) continue;
+        const depth = water.surfaceY - terrainHeight(x + 2, z + 2);
+        if (depth <= 0) continue;
+        ctx.fillStyle =
+          depth < 1 ? "#9ecbc5" : depth < 3 ? "#7bb7bf" : "#659eae";
+        ctx.fillRect(x, z, 4, 4);
+      }
   for (const b of city.plan.parcels) {
     ctx.fillStyle =
       b.floors >= 5 ? "#9caab6" : b.floors > 1 ? "#bbc4ca" : "#ced2c9";

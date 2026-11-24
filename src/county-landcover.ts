@@ -1,21 +1,116 @@
 import type { CityPlan } from "./city-plan.ts";
-import { terrainHeight } from "./county-plan.ts";
+import { sampleCountyWater, countyWaterBounds } from "./county-hydrology.ts";
+import { LIMIT, terrainHeight } from "./county-plan.ts";
 import { randomSeed, type Box } from "./world.ts";
 
 const clamp = (n: number) => Math.min(1, Math.max(0, n));
 const transition = (x: number) => x * x * (3 - 2 * x);
-export function dryCountry(x: number, z: number) {
-  return transition(clamp((-z - 275 + 70 * Math.sin(x / 210)) / 270));
-}
-export function landColor(x: number, z: number) {
-  const dry = dryCountry(x, z);
-  const woods = transition(clamp((z - 260) / 255));
-  const tone = Math.sin(x / 89 + z / 110) * Math.cos(z / 66) * 8;
+// Interpolate seeded lattice values so a grove has irregular edges but remains
+// stable across parcel generation order, clients and server restarts.
+function patch(x: number, z: number, scale: number, seed: number) {
+  const u = x / scale,
+    v = z / scale;
+  const i = Math.floor(u),
+    j = Math.floor(v);
+  function corner(dx: number, dz: number) {
+    let h = Math.imul(i + dx, 0x1f1f1f1f) ^ Math.imul(j + dz, 0x45d9f3b) ^ seed;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
+  const a = transition(u - i),
+    b = transition(v - j);
   return (
-    (Math.round(240 + dry * 15 - woods * 52 + tone * woods) << 16) |
-    (Math.round(248 - dry * 34 - woods * 28 + tone * woods) << 8) |
-    Math.round(235 - dry * 65 - woods * 36 + tone * woods)
+    (1 - b) * ((1 - a) * corner(0, 0) + a * corner(1, 0)) +
+    b * ((1 - a) * corner(0, 1) + a * corner(1, 1))
   );
+}
+function province(
+  x: number,
+  z: number,
+  cx: number,
+  cz: number,
+  rx: number,
+  rz: number,
+) {
+  return Math.exp(-(((x - cx) / rx) ** 2 + ((z - cz) / rz) ** 2));
+}
+
+export function countyHabitat(x: number, z: number) {
+  // Beyond the playable edge the rendered ridges have independent elevations.
+  const inside = Math.abs(x) < LIMIT - 20 && Math.abs(z) < LIMIT - 20;
+  const height = inside ? terrainHeight(x, z) : 30;
+  const sx = inside
+    ? (terrainHeight(x + 14, z) - terrainHeight(x - 14, z)) / 28
+    : 0;
+  const sz = inside
+    ? (terrainHeight(x, z + 14) - terrainHeight(x, z - 14)) / 28
+    : 0;
+  const slope = Math.hypot(sx, sz);
+  const water = sampleCountyWater(x, z);
+  const marsh = water
+    ? transition(clamp(1 - Math.max(0, water.shoreDistance) / 30)) *
+      transition(clamp(1 - Math.max(0, height - water.surfaceY) / 10))
+    : 0;
+  const broad = patch(x, z, 255, 93451) - 0.5;
+  const fine = patch(x, z, 72, 47841) - 0.5;
+  const basins = Math.max(
+    province(x, z, -765, -680, 690, 710),
+    province(x, z, 690, -700, 850, 505),
+  );
+  const uplands = Math.max(
+    province(x, z, -360, 700, 760, 460),
+    province(x, z, 650, 520, 560, 700),
+    province(x, z, -890, 190, 370, 410),
+  );
+  // Cool pole-facing slopes and sheltered foothills sustain trees farther
+  // into dry country; sun-exposed faces break up forest on the same ridge.
+  const aspect = Math.max(-1, Math.min(1, sz * 1.8));
+  const dry = transition(
+    clamp(
+      0.22 +
+        0.97 * basins -
+        0.38 * uplands +
+        broad * 0.74 +
+        fine * 0.23 +
+        aspect * 0.16 -
+        marsh * 0.98,
+    ),
+  );
+  const woods =
+    transition(
+      clamp(
+        0.04 +
+          0.98 * uplands -
+          basins * 0.31 -
+          broad * 0.91 +
+          fine * 0.25 -
+          aspect * 0.16 +
+          Math.min(height / 400, 0.18) +
+          0.34 * marsh,
+      ),
+    ) *
+    (1 - 0.88 * transition(clamp((slope - 0.37) / 0.49)));
+  return { dry, woods, marsh, slope };
+}
+
+export function dryCountry(x: number, z: number) {
+  return countyHabitat(x, z).dry;
+}
+export function landColor(x: number, z: number, habitat = countyHabitat(x, z)) {
+  const { dry, woods, marsh } = habitat;
+  const tone = (patch(x, z, 45, 713) - 0.5) * 13;
+  const channel = (n: number) =>
+    Math.max(0, Math.min(255, Math.round(n + tone)));
+  return (
+    (channel(238 + dry * 17 - woods * 51 - marsh * 25) << 16) |
+    (channel(245 - dry * 38 - woods * 27 - marsh * 18) << 8) |
+    channel(225 - dry * 65 - woods * 37 - marsh * 24)
+  );
+}
+
+function submerged(x: number, z: number, y: number) {
+  const w = sampleCountyWater(x, z);
+  return !!w && w.surfaceY > y;
 }
 
 type Obstacle = (x: number, z: number) => boolean;
@@ -113,12 +208,6 @@ class PlantSpacing {
   }
 }
 
-function woodland(x: number, z: number) {
-  const groves =
-    0.47 + 0.3 * Math.sin(x / 98 + z / 85) + 0.23 * Math.cos(z / 59 - x / 111);
-  return transition(clamp((z - 275) / 150)) * groves;
-}
-
 export function regionalTrees(plan: CityPlan, limit: number): Box[] {
   const random = randomSeed("switchback-groves");
   const trees: Box[] = [];
@@ -135,6 +224,7 @@ export function regionalTrees(plan: CityPlan, limit: number): Box[] {
       Math.abs(x) >= limit - 4 ||
       Math.abs(z) >= limit - 4 ||
       !clearOfLotsAndRoads(plan, x, z) ||
+      submerged(x, z, terrainHeight(x, z)) ||
       !space.accept(x, z, radius)
     )
       return;
@@ -165,16 +255,12 @@ export function regionalTrees(plan: CityPlan, limit: number): Box[] {
           4,
         );
       }
-  const depth = Math.max(0, limit - 275);
-  const attempts = Math.ceil((2 * limit * depth) / 420);
+  const attempts = Math.ceil((2 * limit) ** 2 / 980);
   for (let i = 0; i < attempts; i++) {
     const x = (random() * 2 - 1) * limit,
-      z = 275 + random() * depth;
-    if (random() > woodland(x, z)) continue;
-    const y = terrainHeight(x, z);
-    const slope =
-      Math.hypot(terrainHeight(x + 4, z) - y, terrainHeight(x, z + 4) - y) / 4;
-    if (slope > 0.8 || random() > 1 - clamp(slope - 0.18)) continue;
+      z = (random() * 2 - 1) * limit;
+    const { woods, marsh, slope } = countyHabitat(x, z);
+    if (slope > 0.8 || random() > woods * (1 - marsh)) continue;
     const h = 7 + random() * 9;
     plant(x, z, "county-pine", h, h * 0.047, 4.2 + h * 0.23);
   }
@@ -185,7 +271,7 @@ export interface GroundPlant {
   x: number;
   y: number;
   z: number;
-  kind: "yucca" | "sage" | "fern";
+  kind: "yucca" | "sage" | "fern" | "reed" | "grass";
   size: number;
 }
 
@@ -195,13 +281,11 @@ export function regionalUnderbrush(plan: CityPlan, limit: number) {
   const random = randomSeed("switchback-ground-cover");
   const space = new PlantSpacing(3);
   const plants: GroundPlant[] = [];
-  for (let i = 0; i < Math.ceil((2 * limit) ** 2 / 4400); i++) {
+  for (let i = 0; i < Math.ceil((2 * limit) ** 2 / 7400); i++) {
     const cx = (random() * 2 - 1) * limit,
       cz = (random() * 2 - 1) * limit;
-    const dry = dryCountry(cx, cz),
-      woods = woodland(cx, cz);
-    const forest = woods > dry;
-    if (random() > (forest ? woods : dry)) continue;
+    const { dry, woods, marsh } = countyHabitat(cx, cz);
+    if (random() > Math.max(woods, dry, 0.22) * (1 - marsh)) continue;
     const count = 3 + Math.floor(random() * 7);
     for (let j = 0; j < count; j++) {
       const angle = random() * 2 * Math.PI,
@@ -214,11 +298,59 @@ export function regionalUnderbrush(plan: CityPlan, limit: number) {
         !clearOfLotsAndRoads(plan, x, z)
       )
         continue;
-      const kind = forest ? "fern" : random() < 0.34 ? "yucca" : "sage";
+      const h = countyHabitat(x, z);
+      if (h.marsh > 0.7 || submerged(x, z, terrainHeight(x, z))) continue;
+      const kind =
+        random() < h.woods
+          ? "fern"
+          : random() < h.dry
+            ? random() < 0.34
+              ? "yucca"
+              : "sage"
+            : "grass";
       const size =
         kind === "sage" ? 0.26 + random() * 0.55 : 0.5 + random() * 0.9;
       if (space.accept(x, z, size))
         plants.push({ x, y: terrainHeight(x, z), z, kind, size });
+    }
+  }
+  // Narrow banks are easily missed by county-wide sampling. Seed colonies in
+  // waterbody bounds, then check depth and bank moisture for each individual.
+  for (const bounds of countyWaterBounds) {
+    const width = bounds.maxX - bounds.minX,
+      depth = bounds.maxZ - bounds.minZ;
+    for (let i = 0; i < Math.ceil((width * depth) / 220); i++) {
+      const cx = bounds.minX + random() * width,
+        cz = bounds.minZ + random() * depth;
+      const bank = sampleCountyWater(cx, cz);
+      if (
+        !bank ||
+        Math.abs(bank.shoreDistance) > 12 ||
+        patch(cx, cz, 29, 841) < 0.32
+      )
+        continue;
+      for (let j = 0; j < 5; j++) {
+        const x = cx + (random() - 0.5) * 9,
+          z = cz + (random() - 0.5) * 9;
+        if (
+          Math.abs(x) >= limit ||
+          Math.abs(z) >= limit ||
+          !clearOfLotsAndRoads(plan, x, z)
+        )
+          continue;
+        const water = sampleCountyWater(x, z),
+          y = terrainHeight(x, z);
+        if (
+          !water ||
+          Math.abs(water.shoreDistance) > 13 ||
+          y < water.surfaceY - 0.35 ||
+          y > water.surfaceY + 2.4
+        )
+          continue;
+        const size = 0.84 + random() * 0.78;
+        if (space.accept(x, z, size * 0.64))
+          plants.push({ x, y, z, kind: "reed", size });
+      }
     }
   }
   return plants;

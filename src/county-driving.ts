@@ -1,3 +1,4 @@
+import { sampleCountyWater } from "./county-hydrology.ts";
 import {
   vehicleEntersRunner,
   type Pedestrian,
@@ -217,7 +218,10 @@ export class CountyDriveWorld {
     const [launch, power, limit, lock] = handling[kind];
     const previous = state.speed;
     const magnitude = Math.abs(previous);
-    const resistance = 0.18 + 0.00105 * magnitude * magnitude;
+    const water = sampleCountyWater(state.p[0], state.p[2]);
+    const immersion = water ? Math.max(0, water.surfaceY - state.p[1]) : 0;
+    const resistance =
+      0.18 + 0.00105 * magnitude * magnitude + immersion * magnitude * 0.85;
     const slowing = throttle * previous < 0;
     let speed: number;
     const slide = brake && side !== 0 && previous > 5;
@@ -358,6 +362,17 @@ export class CountyDriveWorld {
       const x = Math.abs(to[0] - b.p[0]),
         z = Math.abs(to[2] - b.p[2]);
       if (x < b.s[0] / 2 && z < b.s[2] / 2) ground = top;
+    }
+    const water = sampleCountyWater(to[0], to[2]);
+    if (water && water.surfaceY - ground > 0.85) {
+      const previousWater = sampleCountyWater(from[0], from[2]);
+      if (
+        !previousWater ||
+        water.surfaceY - ground > previousWater.surfaceY - from[1] + 1e-6
+      ) {
+        state.speed = 0;
+        return false;
+      }
     }
     to[1] = ground;
     const margin = (Math.hypot(w, l) * Math.abs(turn)) / 2;

@@ -1,3 +1,4 @@
+import { terrainHeight } from "../src/county-plan.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
@@ -189,4 +190,17 @@ test("sideways momentum collides with a wall beside the chassis", () => {
   assert.equal(pose.speed, 0);
   assert.equal(pose.slip, 0);
   assert.ok(pose.p[0] < -319.45);
+});
+test("a car can ford the lake margin and reverse back out at the deep-water limit", () => {
+  const world = new CountyDriveWorld([]);
+  const pose = car(12);
+  pose.p = [200, terrainHeight(200, 745), 745];
+  for (let i = 0; i < 1000; i++) world.advance(pose, "saloon", w);
+  const wetZ = pose.p[2];
+  assert.ok(wetZ < 720 && wetZ > 635);
+  assert.equal(pose.speed, 0);
+  assert.ok(22 - pose.p[1] > 0.6 && 22 - pose.p[1] <= 0.85);
+  for (let i = 0; i < 300; i++)
+    world.advance(pose, "saloon", driveInput(-1, 0, false));
+  assert.ok(pose.p[2] > wetZ + 5);
 });

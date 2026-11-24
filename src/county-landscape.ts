@@ -187,6 +187,64 @@ function fernShape() {
   return geometry;
 }
 
+// Marsh stems end in dark seed heads above the leaves. Meadow grasses splay
+// lower and wider, so adjoining habitats read by silhouette as well as hue.
+function grassTuft(reeds: boolean) {
+  const points: number[] = [],
+    colors: number[] = [];
+  function triangle(a: number[], b: number[], c: number[], tint: T.Color) {
+    points.push(...a, ...b, ...c);
+    for (let i = 0; i < 3; i++) colors.push(tint.r, tint.g, tint.b);
+  }
+  const base = new T.Color(reeds ? 0x708149 : 0x92915d),
+    tip = new T.Color(reeds ? 0xa9ac65 : 0xc2b577),
+    seed = new T.Color(0x674f36);
+  for (let i = 0; i < (reeds ? 15 : 11); i++) {
+    const a = i * 2.39996,
+      dx = Math.cos(a),
+      dz = Math.sin(a);
+    const radius = 0.09 + (i % 4) * 0.061,
+      x = dx * radius,
+      z = dz * radius;
+    const upright = reeds && i % 4 === 0;
+    const spread = upright ? 0.07 : (reeds ? 0.21 : 0.45) + (i % 3) * 0.07;
+    const height =
+      (reeds ? 0.95 : 0.43) + (i % 5) * 0.07 + (upright ? 0.45 : 0);
+    const w = upright ? 0.016 : 0.045;
+    const left = [x - dz * w, 0, z + dx * w],
+      right = [x + dz * w, 0, z - dx * w];
+    const midX = x + dx * spread * 0.3,
+      midZ = z + dz * spread * 0.3;
+    const l = [midX - dz * w, height * 0.67, midZ + dx * w];
+    const r = [midX + dz * w, height * 0.67, midZ - dx * w];
+    const endX = x + dx * spread,
+      endZ = z + dz * spread;
+    triangle(left, right, l, base);
+    triangle(right, r, l, base);
+    triangle(l, r, [endX, height, endZ], tip);
+    if (upright) {
+      const h = height - 0.12;
+      // Two crossed faces keep the seed head distinct from every direction.
+      for (const [wx, wz] of [
+        [0.029, 0],
+        [0, 0.029],
+      ]) {
+        const lb = [endX - wx, h, endZ - wz],
+          rb = [endX + wx, h, endZ + wz];
+        const lt = [endX - wx, h + 0.21, endZ - wz],
+          rt = [endX + wx, h + 0.21, endZ + wz];
+        triangle(lb, rb, lt, seed);
+        triangle(rb, rt, lt, seed);
+      }
+    }
+  }
+  const geo = new T.BufferGeometry();
+  geo.setAttribute("position", new T.Float32BufferAttribute(points, 3));
+  geo.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
 export function drawRegionalLandscape(group: T.Group, city: City) {
   const random = randomSeed("switchback-foliage-appearance");
   const transform = new T.Object3D();
@@ -198,7 +256,13 @@ export function drawRegionalLandscape(group: T.Group, city: City) {
     farMaterial = canopyMaterial(true);
   const yucca = yuccaRosette(),
     sage = new T.IcosahedronGeometry(1, 0),
-    fern = fernShape();
+    fern = fernShape(),
+    reeds = grassTuft(true),
+    grass = grassTuft(false);
+  const tuft = new T.MeshLambertMaterial({
+    vertexColors: true,
+    side: T.DoubleSide,
+  });
   const blades = new T.MeshLambertMaterial({
     color: 0x849875,
     side: T.DoubleSide,
@@ -251,7 +315,8 @@ export function drawRegionalLandscape(group: T.Group, city: City) {
     transform.updateMatrix();
     if (kind === "yucca") add(yucca, blades, 192);
     else if (kind === "sage") add(sage, brush, 192);
-    else add(fern, fronds, 192);
+    else if (kind === "fern") add(fern, fronds, 192);
+    else add(kind === "reed" ? reeds : grass, tuft, 192);
   }
   for (const { geo, material, matrices } of batches.values()) {
     const mesh = new T.InstancedMesh(geo, material, matrices.length);

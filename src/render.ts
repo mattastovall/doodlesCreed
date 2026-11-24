@@ -859,6 +859,10 @@ export class Renderer {
             child.position.z - this.camera.position.z,
           ) < 180;
     }
+    const waterTime = this.cityGroup.userData.waterTime;
+    if (waterTime)
+      waterTime.value =
+        reducedMotion || this.motionPreference.matches ? 0 : time;
     this.sunlight?.update(this.camera, this.renderer, this.cityGroup, time);
     this.inkPost.uniforms.clip.value.set(this.camera.near, this.camera.far);
     this.renderer.setRenderTarget(this.inkTarget);

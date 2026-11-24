@@ -546,14 +546,19 @@ export class Controller {
     this.anchorVelocity.set(0, 0, 0);
     return true;
   }
-  update(dt: number, input: MovementInput) {
+  update(dt: number, input: MovementInput, waterSurface?: number) {
     dt = Math.min(dt, 1 / 30);
     this.actionTime -= dt;
     this.wallCooldown -= dt;
     this.ladderCooldown -= dt;
-    const boost = !!input.boost && !this.boostWas;
+    const immersion =
+      waterSurface === undefined
+        ? 0
+        : Math.max(0, waterSurface - this.position.y);
+    const swimming = immersion > 0.7;
+    const boost = !swimming && !!input.boost && !this.boostWas;
     this.boostWas = !!input.boost;
-    const jump = input.jump && !this.jumpWas,
+    const jump = !swimming && input.jump && !this.jumpWas,
       hook = this.grappleEnabled && input.grapple && !this.grappleWas;
     this.jumpWas = input.jump;
     this.grappleWas = input.grapple;
@@ -805,6 +810,17 @@ export class Controller {
         1,
         this.stamina + dt * (this.grounded ? 0.35 : 0.15),
       );
+    if (immersion > 0 && !this.anchor) {
+      const drag = Math.exp(-dt * Math.min(immersion, 1) * 3);
+      this.velocity.x *= drag;
+      this.velocity.z *= drag;
+      if (swimming) {
+        // Damped buoyancy keeps eye level above the surface and preserves bank collisions.
+        this.velocity.y +=
+          (gravity + (immersion - 1) * 24 - this.velocity.y * 7) * dt;
+        this.action = "SWIM";
+      }
+    }
     const horizontal = this.speed;
     if (horizontal > 52) {
       this.velocity.x *= 52 / horizontal;

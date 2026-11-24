@@ -1,3 +1,4 @@
+import { watershedElevation } from "./county-hydrology.ts";
 import { surveyHighways } from "./county-highways.ts";
 import { randomSeed, type V3 } from "./world.ts";
 import type { CityPlan, NeighborhoodId, Street } from "./city-plan.ts";
@@ -191,7 +192,18 @@ export function elevation(x: number, z: number) {
     96 * mesa(420, -520, 300, 185) +
     96 * Math.exp(-(((x + 120) / 410) ** 2 + ((z - 540) / 150) ** 2)) +
     70 * mesa(-620, -560, 220, 150);
-  return routeGrade(z) * (1 - blend) + (oldHills + hills * relief) * blend;
+  // Weathered benches break the mesa rims, while low spurs descend the
+  // southern ridge into the drainage. The road cut still owns its full grade.
+  const mesaRims = mesa(420, -520, 345, 210) + mesa(-620, -560, 255, 185);
+  const benches =
+    mesaRims * (6 * Math.sin(x / 43 + z / 62) + 3 * Math.cos(z / 23));
+  const spur =
+    14 *
+    Math.exp(-(((x + 130) / 450) ** 2 + ((z - 510) / 170) ** 2)) *
+    Math.cos(x / 55 + z / 86);
+  const natural = oldHills + hills * (relief + benches + spur);
+  const graded = routeGrade(z) * (1 - blend) + natural * blend;
+  return watershedElevation(x, z, graded, distance);
 }
 
 // Shared sampling follows the exact diagonal used by the terrain collider.

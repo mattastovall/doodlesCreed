@@ -1,3 +1,4 @@
+import { CountyWaterView } from "./county-water-view.ts";
 import { drawRegionalLandscape } from "./county-landscape.ts";
 import {
   countySky,
@@ -7,7 +8,7 @@ import {
 } from "./county-atmosphere.ts";
 import {
   clearOfLotsAndRoads,
-  dryCountry,
+  countyHabitat,
   landColor,
 } from "./county-landcover.ts";
 import { terrainHeight } from "./county-plan.ts";
@@ -78,9 +79,10 @@ function groundGeometry(vertices: number[], indices: number[]) {
     const x = vertices[i],
       z = vertices[i + 2];
     uv.push(x / 18, z / 18);
-    tint.setHex(landColor(x, z));
+    const habitat = countyHabitat(x, z);
+    tint.setHex(landColor(x, z, habitat));
     colors.push(tint.r, tint.g, tint.b);
-    dry.push(dryCountry(x, z));
+    dry.push(habitat.dry);
   }
   geo.setAttribute("uv", new T.Float32BufferAttribute(uv, 2));
   geo.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
@@ -163,6 +165,8 @@ export async function drawCounty(city: City, group: T.Group) {
     geometry("lamp"),
     geometry("outcrop"),
   ]);
+  const water = new CountyWaterView(textures.sky);
+  group.userData.waterTime = water.time;
   const terrainCells = new Map<string, T.BufferGeometry[]>();
   for (const box of city.boxes) {
     if (box.kind !== "ground") continue;
@@ -182,14 +186,14 @@ export async function drawCounty(city: City, group: T.Group) {
       cy + h / 2,
       cz - d / 2,
     ];
-    const geo = groundGeometry(
-      vertices,
-      box.mesh?.indices ?? [0, 1, 2, 0, 2, 3],
-    );
+    const indices = box.mesh?.indices ?? [0, 1, 2, 0, 2, 3];
+    const geo = groundGeometry(vertices, indices);
+    water.addTile(cx, cz, w, d, vertices, indices);
     const cell = Math.floor(cx / 480) + "," + Math.floor(cz / 480);
     if (!terrainCells.has(cell)) terrainCells.set(cell, []);
     terrainCells.get(cell)!.push(geo);
   }
+  water.addTo(group);
   for (const tiles of terrainCells.values()) {
     const hill = new T.Mesh(mergeGeometries(tiles)!, terrainTint);
     hill.receiveShadow = true;
